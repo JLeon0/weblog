@@ -25,7 +25,16 @@ const INITIAL_TAIL = 200;
 const KEEPALIVE_MS = 20000; // igual que ServerAliveInterval=20
 const MAX_BACKOFF_MS = 30000;
 
+const STEP_TIMEOUT_MS = 15000; // tope para abrir la ruta al destino y para arrancar tail
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const withTimeout = (promise, ms, what) => {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`tiempo agotado ${what}`)), ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+};
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`; // escapa para shell remoto
 
 function connect(cred, sock, onError) {
@@ -128,9 +137,11 @@ class LogSession extends EventEmitter {
   connectOnce() {
     return new Promise(async (resolve, reject) => {
       let settled = false;
+      let execTimer = null;
       const done = (err) => {
         if (settled) return;
         settled = true;
+        clearTimeout(execTimer);
         this.closeClients();
         this.finish = null;
         err ? reject(err) : resolve();
@@ -142,15 +153,18 @@ class LogSession extends EventEmitter {
         const { jump, target, logDir, logFile } = this.profile;
         let sock;
         if (jump) {
+          this.setState('connecting', `Conectando al salto ${jump.user}@${jump.host}...`);
           const jumpClient = await connect(jump, undefined, onError);
           this.clients.push(jumpClient);
+          this.setState('connecting', `Salto conectado. Abriendo ruta hacia ${target.host}:${target.port}...`);
           try {
-            sock = await forward(jumpClient, target.host, target.port);
+            sock = await withTimeout(forward(jumpClient, target.host, target.port), STEP_TIMEOUT_MS, 'abriendo la ruta al destino');
           } catch (err) {
-            // El salto conectó, pero desde él no se llega al destino (host/puerto incorrectos o bloqueados)
+            // El salto conectó, pero desde él no se llega al destino (host/puerto incorrectos, bloqueado o sin respuesta)
             throw new Error(`el servidor intermedio no pudo llegar a ${target.host}:${target.port} (${err.message})`);
           }
         }
+        this.setState('connecting', `Conectando a ${target.user}@${target.host}...`);
         const targetClient = await connect(target, sock, onError);
         this.clients.push(targetClient);
 
@@ -160,7 +174,11 @@ class LogSession extends EventEmitter {
         const cmd = `cd ${shq(logDir)} && tail -n ${n} -F ${shq(logFile)}`;
         this.everConnected = true;
 
+        // Si el servidor no responde al comando, no quedarse esperando para siempre
+        execTimer = setTimeout(() => done(new Error('el destino no respondió al iniciar tail')), STEP_TIMEOUT_MS);
+        this.setState('connecting', 'Ejecutando tail en el servidor...');
         targetClient.exec(cmd, (err, stream) => {
+          clearTimeout(execTimer);
           if (err) return done(err);
           this.setState('connected', `Conectado a ${this.label}`);
           if (reconnecting) {
