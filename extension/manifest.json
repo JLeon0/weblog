@@ -1,21 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Evidencias Matriz de Pruebas",
-  "version": "1.0.0",
-  "description": "Navega filas de una hoja de Google Sheets y pega capturas en la columna Evidencia.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvOewnth8VBCGGF7kykrVVne3rPmRFr/DFqL0tZmffgVyyssi/ILNVZW7oMqZ6rdj1AjzWi8gy/GIPOd4tNezl2qTpkV5TdrnanXlN3BWpgQaposLy2LcPuJiIc1mm7DrL/GL9T4Cb2ceexVExg4MVHoDUnzwigigvwSeGd/pfOSzAMc/ycaZCXa6ew4pBYk5qz5T+mrGaxIlo8YauJm7JUPnLIPOX5hKRnwyEioTxu1VpwOSoVWNNqyzRx50NYM2hB0NoH3DNYg4Ra1cqoX8zjRVu2QBFPWyHMLoTkrZpPhVFUfZu6uToQujJjJSCy6fwO4fWKA/G5H6hWQCCM6McwIDAQAB",
+  "version": "2.0.0",
+  "description": "Navega filas de un Excel local con la matriz de pruebas y guarda capturas como evidencia.",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "identity", "storage", "scripting", "activeTab", "tabs"],
-  "host_permissions": ["<all_urls>", "https://sheets.googleapis.com/*", "https://www.googleapis.com/*"],
+  "permissions": ["sidePanel", "storage", "scripting", "activeTab", "tabs"],
+  "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "side_panel": { "default_path": "sidepanel.html" },
-  "action": { "default_title": "Abrir panel de pruebas" },
-  "oauth2": {
-    "client_id": "REEMPLAZAR.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.file"
-    ]
-  },
-  "icons": {}
+  "action": { "default_title": "Abrir panel de pruebas" }
 }
