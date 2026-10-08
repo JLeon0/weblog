@@ -1,0 +1,695 @@
+// Interfaz del visor: bóveda, perfiles, WebSocket con el backend, filtros y colores.
+// Todo texto del log se inserta con textContent (nunca innerHTML).
+(() => {
+  const MAX_RENDER = 3000; // líneas máximas que se pintan a la vez
+  const $ = (id) => document.getElementById(id);
+
+  const el = {
+    vaultScreen: $('vault-screen'),
+    vaultForm: $('vault-form'),
+    vaultHelp: $('vault-help'),
+    vaultSubmit: $('vault-submit'),
+    vaultError: $('vault-error'),
+    master: $('master'),
+    master2: $('master2'),
+    master2Row: $('master2-row'),
+    app: $('app'),
+    profileList: $('profile-list'),
+    newProfile: $('new-profile'),
+    lock: $('lock'),
+    title: $('current-title'),
+    status: $('status'),
+    editProfile: $('edit-profile'),
+    restart: $('restart'),
+    closeConn: $('close-conn'),
+    detailDialog: $('detail-dialog'),
+    detailTitle: $('detail-title'),
+    detailBody: $('detail-body'),
+    detailOpen: $('detail-open'),
+    detailEdit: $('detail-edit'),
+    detailDelete: $('detail-delete'),
+    detailClose: $('detail-close'),
+    closeDialog: $('close-dialog'),
+    closeText: $('close-text'),
+    closeCancel: $('close-cancel'),
+    closeConfirm: $('close-confirm'),
+    search: $('search'),
+    regex: $('regex'),
+    caseSens: $('case'),
+    onlyIo: $('only-io'),
+    autoscroll: $('autoscroll'),
+    fmtXml: $('fmt-xml'),
+    counter: $('counter'),
+    clear: $('clear'),
+    exportBtn: $('export'),
+    log: $('log'),
+    dialog: $('profile-dialog'),
+    dialogTitle: $('dialog-title'),
+    profileForm: $('profile-form'),
+    profileError: $('profile-error'),
+    useJump: $('use-jump'),
+    jumpFields: $('jump-fields'),
+    deleteProfile: $('delete-profile'),
+    cancelProfile: $('cancel-profile'),
+  };
+
+  let profiles = [];
+  let currentId = null;
+  let entries = []; // { text, level, tag, marker }
+  let ws = null;
+  let wsRetry = null;
+  let renderPending = false;
+  let editingId = null;
+  let blockTag = ''; // etiqueta del bloque request/response en curso (se mantiene entre líneas)
+
+  // ---------- API ----------
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    return data;
+  }
+
+  // ---------- Colores / clasificación ----------
+  function classify(text) {
+    let level = 'OTHER';
+    if (/\b(ERROR|SEVERE|FATAL)\b|Exception\b/.test(text)) level = 'ERROR';
+    else if (/\bWARN(ING)?\b/.test(text)) level = 'WARN';
+    else if (/\bINFO\b/.test(text)) level = 'INFO';
+    else if (/\b(DEBUG|TRACE)\b/.test(text)) level = 'DEBUG';
+
+    // Un bloque empieza en "Inicio mensaje request/response" (o "Request url") y termina
+    // en "Fin ...". Todas las líneas del bloque, incluido el cuerpo XML, llevan la etiqueta.
+    let tag = '';
+    let start = false; // "Inicio mensaje ..." (aquí aparece el botón copiar)
+    let end = false; // "Fin ..." que cierra el bloque
+    if (/Inicio mensaje (request|response)|Request url of Endpoint/i.test(text)) {
+      blockTag = /response/i.test(text) ? 'response' : 'request';
+      start = /Inicio mensaje/i.test(text);
+      tag = blockTag;
+      if (/Fin /i.test(text)) {
+        end = true;
+        blockTag = '';
+      }
+    } else if (blockTag) {
+      tag = blockTag;
+      if (/Fin /i.test(text)) {
+        end = true;
+        blockTag = '';
+      }
+    } else if (/\bresponse\b/i.test(text)) tag = 'response';
+    else if (/\brequest\b/i.test(text)) tag = 'request';
+
+    const marker = text.startsWith('--- ');
+    return { text, level, tag, marker, start, end };
+  }
+
+  // Texto desde una entrada de inicio hasta su línea de fin (incluye lo oculto por filtros)
+  function blockText(startEntry) {
+    const i = entries.indexOf(startEntry);
+    if (i < 0) return null;
+    const fmt = el.fmtXml.checked;
+    const out = [];
+    for (let j = i; j < entries.length; j++) {
+      out.push(displayText(entries[j], fmt));
+      if (entries[j].end) break;
+    }
+    return { text: out.join('\n'), closed: entries[i + out.length - 1]?.end === true };
+  }
+
+  // ---------- Formato XML ----------
+  // Indenta un fragmento XML (una etiqueta por línea, sangría de 2 espacios)
+  function prettyXml(xml) {
+    const tokens = xml.replace(/>\s*</g, '>\n<').split('\n');
+    let depth = 0;
+    const out = [];
+    for (const raw of tokens) {
+      const t = raw.trim();
+      if (!t) continue;
+      const closing = /^<\//.test(t);
+      const declaration = /^<[?!]/.test(t);
+      const selfClosing = /\/>$/.test(t);
+      const inlineClose = /<\//.test(t); // p. ej. <a>texto</a> en la misma línea
+      if (closing) depth = Math.max(0, depth - 1);
+      out.push('  '.repeat(depth) + t);
+      if (!closing && !declaration && !selfClosing && !inlineClose && /^<[^/]/.test(t)) depth++;
+    }
+    return out.join('\n');
+  }
+
+  // Separa el texto previo y posterior al XML de la línea, y formatea el XML
+  function prettyLine(text) {
+    const start = text.search(/<[A-Za-z?!/]/);
+    const end = text.lastIndexOf('>');
+    if (start < 0 || end < start) return text;
+    const before = text.slice(0, start).trimEnd();
+    const after = text.slice(end + 1).trim();
+    const parts = [];
+    if (before) parts.push(before);
+    parts.push(prettyXml(text.slice(start, end + 1)));
+    if (after) parts.push(after);
+    return parts.join('\n');
+  }
+
+  // Texto que se muestra (o se copia): formateado si el checkbox está activo
+  function displayText(e, fmt) {
+    if (!fmt) return e.text;
+    if (e.pretty === undefined) e.pretty = prettyLine(e.text);
+    return e.pretty;
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // Respaldo para contextos sin Clipboard API
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    }
+  }
+
+  // ---------- Filtros ----------
+  function levelChecked(level) {
+    const box = document.querySelector(`input[data-level="${level}"]`);
+    return box ? box.checked : true;
+  }
+
+  // Devuelve { base: RegExp|null, invalid: bool }
+  function currentMatcher() {
+    const q = el.search.value;
+    el.search.classList.remove('bad');
+    if (!q) return { base: null, invalid: false };
+    try {
+      const src = el.regex.checked ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return { base: new RegExp(src, el.caseSens.checked ? '' : 'i'), invalid: false };
+    } catch (_) {
+      el.search.classList.add('bad');
+      return { base: null, invalid: true };
+    }
+  }
+
+  function visibleEntries() {
+    const { base, invalid } = currentMatcher();
+    const onlyIo = el.onlyIo.checked;
+    return entries.filter((e) => {
+      if (e.marker) return true;
+      if (!levelChecked(e.level)) return false;
+      if (onlyIo && !e.tag) return false;
+      if (invalid) return false;
+      if (base && !base.test(e.text)) return false;
+      return true;
+    });
+  }
+
+  // Pinta el texto resaltando coincidencias (usando solo nodos de texto)
+  function appendHighlighted(parent, text, base) {
+    if (!base) {
+      parent.appendChild(document.createTextNode(text));
+      return;
+    }
+    const g = new RegExp(base.source, base.flags + 'g');
+    let last = 0;
+    for (const m of text.matchAll(g)) {
+      if (m[0].length === 0) continue;
+      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const mark = document.createElement('mark');
+      mark.textContent = m[0];
+      parent.appendChild(mark);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  function render() {
+    renderPending = false;
+    const { base } = currentMatcher();
+    const fmt = el.fmtXml.checked;
+    const list = visibleEntries();
+    const shown = list.slice(-MAX_RENDER);
+
+    const frag = document.createDocumentFragment();
+    for (const e of shown) {
+      const div = document.createElement('span');
+      div.className = 'line';
+      if (e.marker) div.classList.add('marker');
+      else {
+        div.classList.add(`lvl-${e.level}`);
+        if (e.tag) div.classList.add(`tag-${e.tag}`);
+      }
+      if (e.start) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'copy-btn';
+        btn.textContent = 'Copiar bloque';
+        btn.addEventListener('click', async () => {
+          const block = blockText(e);
+          if (!block) {
+            btn.textContent = 'No disponible';
+          } else {
+            const ok = await copyText(block.text);
+            btn.textContent = ok ? (block.closed ? 'Copiado' : 'Copiado (bloque sin Fin)') : 'Error al copiar';
+          }
+          setTimeout(() => (btn.textContent = 'Copiar bloque'), 1500);
+        });
+        div.appendChild(btn);
+      }
+      appendHighlighted(div, displayText(e, fmt), base);
+      div.appendChild(document.createTextNode('\n'));
+      frag.appendChild(div);
+    }
+    el.log.replaceChildren(frag);
+    el.counter.textContent = `${list.length} de ${entries.length} líneas${list.length > MAX_RENDER ? ` (mostrando las últimas ${MAX_RENDER})` : ''}`;
+    if (el.autoscroll.checked) el.log.scrollTop = el.log.scrollHeight;
+  }
+
+  function scheduleRender() {
+    if (renderPending) return;
+    renderPending = true;
+    requestAnimationFrame(render);
+  }
+
+  // ---------- Estado de conexión ----------
+  function setStatus(state, msg = '') {
+    el.status.textContent = labelFor(state);
+    el.status.className = `status ${state === 'connected' ? 'connected' : state}`;
+    el.status.title = msg;
+    // "Cerrar" solo tiene sentido mientras hay una conexión activa o reintentando
+    const active = ['connecting', 'connected', 'reconnecting'].includes(state);
+    el.closeConn.disabled = !currentId || !active;
+  }
+
+  function labelFor(state) {
+    return {
+      idle: 'inactivo',
+      connecting: 'conectando',
+      connected: 'conectado',
+      reconnecting: 'reconectando',
+      stopped: 'detenido',
+      error: 'error',
+    }[state] || state;
+  }
+
+  // ---------- WebSocket ----------
+  function connectWs() {
+    clearTimeout(wsRetry);
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.onopen = () => {
+      if (currentId) ws.send(JSON.stringify({ type: 'subscribe', profileId: currentId }));
+    };
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'backlog') {
+        blockTag = '';
+        entries = msg.lines.map(classify);
+        setStatus(msg.state);
+        render();
+      } else if (msg.type === 'lines') {
+        for (const line of msg.lines) entries.push(classify(line));
+        if (entries.length > 5000) entries.splice(0, entries.length - 5000);
+        scheduleRender();
+      } else if (msg.type === 'status') {
+        if (msg.state === 'warn') {
+          entries.push({ text: `[stderr] ${msg.msg}`, level: 'WARN', tag: '', marker: false });
+          scheduleRender();
+        } else {
+          setStatus(msg.state, msg.msg);
+          if (msg.msg && msg.state !== 'connected') {
+            entries.push({ text: `--- ${msg.msg} ---`, level: 'OTHER', tag: '', marker: true });
+            scheduleRender();
+          }
+        }
+      } else if (msg.type === 'error') {
+        setStatus('error', msg.msg);
+        entries.push({ text: `--- ${msg.msg} ---`, level: 'ERROR', tag: '', marker: true });
+        scheduleRender();
+      }
+    };
+    ws.onclose = () => {
+      if (el.app.classList.contains('hidden')) return; // bóveda bloqueada
+      wsRetry = setTimeout(connectWs, 2000);
+    };
+  }
+
+  function subscribe(id) {
+    currentId = id;
+    entries = [];
+    render();
+    const p = profiles.find((x) => x.id === id);
+    el.title.textContent = p ? p.name : 'Selecciona un perfil';
+    el.editProfile.disabled = !p;
+    el.restart.disabled = !p;
+    setStatus('idle');
+    if (ws && ws.readyState === WebSocket.OPEN && id) {
+      ws.send(JSON.stringify({ type: 'subscribe', profileId: id }));
+    }
+    renderProfiles();
+  }
+
+  // ---------- Detalle del perfil (modal) ----------
+  let detailId = null;
+
+  function openDetail(id) {
+    const p = profiles.find((x) => x.id === id);
+    if (!p) return;
+    detailId = id;
+    el.detailTitle.textContent = p.name;
+    const rows = [
+      ['Destino', `${p.target.user}@${p.target.host}:${p.target.port}`],
+      ['Contraseña destino', p.target.hasPassword ? 'guardada (cifrada)' : 'no guardada'],
+      ['Salto', p.jump ? `${p.jump.user}@${p.jump.host}:${p.jump.port}` : 'ninguno (conexión directa)'],
+    ];
+    if (p.jump) rows.push(['Contraseña salto', p.jump.hasPassword ? 'guardada (cifrada)' : 'no guardada']);
+    rows.push(['Carpeta', p.logDir || '(home del usuario)'], ['Archivo', p.logFile]);
+    el.detailBody.replaceChildren();
+    for (const [k, v] of rows) {
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      el.detailBody.append(dt, dd);
+    }
+    el.detailDialog.showModal();
+  }
+
+  el.detailOpen.addEventListener('click', () => {
+    el.detailDialog.close();
+    subscribe(detailId);
+  });
+
+  el.detailEdit.addEventListener('click', () => {
+    el.detailDialog.close();
+    openDialog(profiles.find((p) => p.id === detailId));
+  });
+
+  el.detailClose.addEventListener('click', () => el.detailDialog.close());
+
+  el.detailDelete.addEventListener('click', async () => {
+    const p = profiles.find((x) => x.id === detailId);
+    if (!p) return;
+    if (!confirm(`¿Eliminar el perfil "${p.name}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api('DELETE', `/api/profiles/${encodeURIComponent(p.id)}`);
+    } catch (err) {
+      alert(`No se pudo eliminar: ${err.message}`);
+      return;
+    }
+    el.detailDialog.close();
+    const wasCurrent = currentId === p.id;
+    await loadProfiles();
+    if (wasCurrent) subscribe(profiles[0]?.id ?? null);
+  });
+
+  // ---------- Perfiles ----------
+  function renderProfiles() {
+    el.profileList.replaceChildren();
+    for (const p of profiles) {
+      const li = document.createElement('li');
+      if (p.id === currentId) li.classList.add('active');
+      const name = document.createElement('span');
+      name.textContent = p.name;
+      const small = document.createElement('small');
+      small.textContent = `${p.target.user}@${p.target.host}${p.jump ? ' · vía salto' : ''}`;
+      const clone = document.createElement('button');
+      clone.type = 'button';
+      clone.className = 'mini secondary clone-btn';
+      clone.title = 'Clonar conexión';
+      clone.textContent = 'Clonar';
+      clone.addEventListener('click', (ev) => {
+        ev.stopPropagation(); // no seleccionar el perfil al clonar
+        cloneProfile(p.id);
+      });
+      li.append(name, small, clone);
+      li.addEventListener('click', () => openDetail(p.id));
+      el.profileList.appendChild(li);
+    }
+  }
+
+  // Duplica el perfil y abre la copia en el formulario para editar sus datos internos
+  async function cloneProfile(id) {
+    try {
+      const copy = await api('POST', `/api/profiles/${encodeURIComponent(id)}/clone`);
+      await loadProfiles();
+      openDialog(copy);
+    } catch (err) {
+      alert(`No se pudo clonar: ${err.message}`);
+    }
+  }
+
+  async function loadProfiles() {
+    profiles = await api('GET', '/api/profiles');
+    renderProfiles();
+    if (!currentId && profiles.length) subscribe(profiles[0].id);
+  }
+
+  function openDialog(profile) {
+    editingId = profile ? profile.id : null;
+    el.dialogTitle.textContent = profile ? 'Editar perfil' : 'Nuevo perfil';
+    el.deleteProfile.classList.toggle('hidden', !profile);
+    el.profileError.textContent = '';
+    const f = el.profileForm;
+    f.reset();
+    const v = (name, val) => { f.elements[name].value = val ?? ''; };
+    v('name', profile?.name);
+    v('logDir', profile?.logDir);
+    v('logFile', profile?.logFile);
+    v('target_host', profile?.target.host);
+    v('target_port', profile?.target.port ?? 22);
+    v('target_user', profile?.target.user);
+    v('jump_host', profile?.jump?.host);
+    v('jump_port', profile?.jump?.port ?? 22);
+    v('jump_user', profile?.jump?.user);
+    f.elements.target_password.placeholder = profile ? '(sin cambios)' : '';
+    f.elements.jump_password.placeholder = profile ? '(sin cambios)' : '';
+    el.useJump.checked = !!profile?.jump;
+    el.jumpFields.classList.toggle('hidden', !el.useJump.checked);
+    el.dialog.showModal();
+  }
+
+  el.useJump.addEventListener('change', () => {
+    el.jumpFields.classList.toggle('hidden', !el.useJump.checked);
+  });
+
+  el.newProfile.addEventListener('click', () => openDialog(null));
+  el.editProfile.addEventListener('click', () => openDialog(profiles.find((p) => p.id === currentId)));
+  el.cancelProfile.addEventListener('click', () => el.dialog.close());
+
+  el.profileForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = el.profileForm.elements;
+    const body = {
+      id: editingId || undefined,
+      name: f.name.value,
+      logDir: f.logDir.value,
+      logFile: f.logFile.value,
+      target: {
+        host: f.target_host.value,
+        port: f.target_port.value,
+        user: f.target_user.value,
+        password: f.target_password.value,
+      },
+      jump: el.useJump.checked
+        ? { host: f.jump_host.value, port: f.jump_port.value, user: f.jump_user.value, password: f.jump_password.value }
+        : null,
+    };
+    try {
+      const saved = await api('POST', '/api/profiles', body);
+      el.profileForm.reset();
+      el.dialog.close();
+      await loadProfiles();
+      subscribe(saved.id);
+    } catch (err) {
+      el.profileError.textContent = err.message;
+    }
+  });
+
+  el.deleteProfile.addEventListener('click', async () => {
+    if (!editingId) return;
+    if (!confirm('¿Eliminar este perfil?')) return;
+    await api('DELETE', `/api/profiles/${encodeURIComponent(editingId)}`);
+    if (currentId === editingId) currentId = null;
+    el.dialog.close();
+    await loadProfiles();
+    if (!currentId) subscribe(profiles[0]?.id ?? null);
+  });
+
+  // ---------- Bóveda ----------
+  function showVault(exists) {
+    el.vaultScreen.classList.remove('hidden');
+    el.app.classList.add('hidden');
+    el.master2Row.classList.toggle('hidden', exists);
+    el.master2.required = !exists;
+    el.vaultHelp.textContent = exists
+      ? 'Introduce tu clave maestra para desbloquear las contraseñas.'
+      : 'Primera vez: crea una clave maestra. Cifra las contraseñas guardadas. No se puede recuperar si la olvidas.';
+    el.vaultSubmit.textContent = exists ? 'Desbloquear' : 'Crear bóveda';
+    el.vaultError.textContent = '';
+    el.master.value = '';
+    el.master.focus();
+  }
+
+  function showApp() {
+    el.vaultScreen.classList.add('hidden');
+    el.app.classList.remove('hidden');
+  }
+
+  el.vaultForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    el.vaultError.textContent = '';
+    const { vaultExists } = await api('GET', '/api/state');
+    try {
+      if (vaultExists) {
+        await api('POST', '/api/unlock', { master: el.master.value });
+      } else {
+        if (el.master.value !== el.master2.value) throw new Error('Las claves no coinciden');
+        await api('POST', '/api/setup', { master: el.master.value });
+      }
+      el.master.value = '';
+      el.master2.value = '';
+      showApp();
+      await loadProfiles();
+      connectWs();
+    } catch (err) {
+      el.vaultError.textContent = err.message;
+    }
+  });
+
+  el.lock.addEventListener('click', async () => {
+    await api('POST', '/api/lock');
+    if (ws) ws.close();
+    currentId = null;
+    entries = [];
+    render();
+    showVault(true);
+  });
+
+  el.restart.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN && currentId) {
+      entries.push({ text: '--- reiniciando conexión ---', level: 'OTHER', tag: '', marker: true });
+      ws.send(JSON.stringify({ type: 'restart', profileId: currentId }));
+    }
+  });
+
+  // Cerrar conexión: pide confirmación antes de enviar la orden al servidor
+  el.closeConn.addEventListener('click', () => {
+    const p = profiles.find((x) => x.id === currentId);
+    el.closeText.textContent = `Se cerrará la conexión con "${p ? p.name : 'este perfil'}" y dejarás de recibir líneas. Podrás volver a conectarla con "Reiniciar conexión".`;
+    el.closeDialog.showModal();
+  });
+  el.closeCancel.addEventListener('click', () => el.closeDialog.close());
+  el.closeConfirm.addEventListener('click', () => {
+    el.closeDialog.close();
+    if (ws && ws.readyState === WebSocket.OPEN && currentId) {
+      ws.send(JSON.stringify({ type: 'stop', profileId: currentId }));
+      entries.push({ text: '--- conexión cerrada por el usuario ---', level: 'OTHER', tag: '', marker: true });
+      scheduleRender();
+    }
+  });
+
+  // ---------- Preferencias de filtros (se guardan en este navegador) ----------
+  const PREFS_KEY = 'visor-logs-filters';
+
+  function savePrefs() {
+    const prefs = {
+      levels: {},
+      regex: el.regex.checked,
+      caseSens: el.caseSens.checked,
+      onlyIo: el.onlyIo.checked,
+      autoscroll: el.autoscroll.checked,
+      fmtXml: el.fmtXml.checked,
+    };
+    document.querySelectorAll('input[data-level]').forEach((b) => (prefs.levels[b.dataset.level] = b.checked));
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (_) {
+      /* almacenamiento bloqueado: los filtros solo duran la sesión */
+    }
+  }
+
+  function loadPrefs() {
+    let prefs = null;
+    try {
+      prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null');
+    } catch (_) {
+      prefs = null;
+    }
+    if (!prefs) return;
+    el.regex.checked = !!prefs.regex;
+    el.caseSens.checked = !!prefs.caseSens;
+    el.onlyIo.checked = !!prefs.onlyIo;
+    el.autoscroll.checked = prefs.autoscroll !== false;
+    el.fmtXml.checked = !!prefs.fmtXml;
+    document.querySelectorAll('input[data-level]').forEach((b) => {
+      if (prefs.levels && typeof prefs.levels[b.dataset.level] === 'boolean') {
+        b.checked = prefs.levels[b.dataset.level];
+      }
+    });
+  }
+
+  const onFilterChange = () => {
+    savePrefs();
+    render();
+  };
+
+  // ---------- Barra de filtros y acciones ----------
+  let searchTimer = null;
+  el.search.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(render, 150);
+  });
+  for (const id of ['regex', 'case', 'only-io', 'autoscroll', 'fmt-xml']) $(id).addEventListener('change', onFilterChange);
+  document.querySelectorAll('input[data-level]').forEach((b) => b.addEventListener('change', onFilterChange));
+
+  el.clear.addEventListener('click', () => {
+    entries = [];
+    render();
+  });
+
+  el.exportBtn.addEventListener('click', () => {
+    const text = visibleEntries().map((e) => e.text).join('\n');
+    const name = `${(profiles.find((p) => p.id === currentId)?.name || 'log').replace(/[^\w-]+/g, '_')}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  // Ctrl+F enfoca la búsqueda en vez del buscador del navegador
+  document.addEventListener('keydown', (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f' && !el.app.classList.contains('hidden')) {
+      ev.preventDefault();
+      el.search.focus();
+      el.search.select();
+    }
+  });
+
+  // ---------- Arranque ----------
+  (async function boot() {
+    loadPrefs();
+    const state = await api('GET', '/api/state');
+    if (state.unlocked) {
+      showApp();
+      await loadProfiles();
+      connectWs();
+    } else {
+      showVault(state.vaultExists);
+    }
+  })().catch((err) => {
+    el.vaultScreen.classList.remove('hidden');
+    el.vaultError.textContent = `No se pudo contactar con el servidor: ${err.message}`;
+  });
+})();

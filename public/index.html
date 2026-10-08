@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Visor de logs SSH</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Pantalla de bóveda: crear o desbloquear -->
+    <section id="vault-screen" class="vault hidden">
+      <form id="vault-form" class="vault-card">
+        <h1>Visor de logs SSH</h1>
+        <p id="vault-help"></p>
+        <label>
+          Clave maestra
+          <input id="master" type="password" autocomplete="current-password" required />
+        </label>
+        <label id="master2-row" class="hidden">
+          Repite la clave maestra
+          <input id="master2" type="password" autocomplete="new-password" />
+        </label>
+        <button type="submit" id="vault-submit">Entrar</button>
+        <p id="vault-error" class="error"></p>
+      </form>
+    </section>
+
+    <!-- Aplicación principal -->
+    <div id="app" class="app hidden">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <strong>Perfiles</strong>
+          <button id="new-profile" type="button" title="Nuevo perfil">+ Nuevo</button>
+        </div>
+        <ul id="profile-list" class="profile-list"></ul>
+        <button id="lock" type="button" class="secondary">Bloquear bóveda</button>
+      </aside>
+
+      <main class="main">
+        <header class="toolbar">
+          <div class="title">
+            <h2 id="current-title">Selecciona un perfil</h2>
+            <span id="status" class="status idle">inactivo</span>
+          </div>
+          <div class="row">
+            <button id="edit-profile" type="button" class="secondary" disabled>Editar perfil</button>
+            <button id="restart" type="button" class="secondary" disabled>Reiniciar conexión</button>
+            <button id="close-conn" type="button" class="danger" disabled>Cerrar conexión</button>
+          </div>
+        </header>
+
+        <div class="filters">
+          <input id="search" type="search" placeholder="Buscar... (Ctrl+F)" />
+          <label class="chk"><input id="regex" type="checkbox" /> Regex</label>
+          <label class="chk"><input id="case" type="checkbox" /> Mayús./minús.</label>
+          <span class="sep"></span>
+          <label class="chk lvl-ERROR"><input type="checkbox" data-level="ERROR" checked /> ERROR</label>
+          <label class="chk lvl-WARN"><input type="checkbox" data-level="WARN" checked /> WARN</label>
+          <label class="chk lvl-INFO"><input type="checkbox" data-level="INFO" checked /> INFO</label>
+          <label class="chk lvl-DEBUG"><input type="checkbox" data-level="DEBUG" checked /> DEBUG</label>
+          <label class="chk lvl-OTHER"><input type="checkbox" data-level="OTHER" checked /> Otros</label>
+          <span class="sep"></span>
+          <label class="chk"><input id="only-io" type="checkbox" /> Solo request/response</label>
+        </div>
+
+        <div class="actions">
+          <span id="counter" class="counter"></span>
+          <label class="chk"><input id="fmt-xml" type="checkbox" /> Formatear XML</label>
+          <label class="chk"><input id="autoscroll" type="checkbox" checked /> Auto-scroll</label>
+          <button id="clear" type="button" class="secondary">Limpiar vista</button>
+          <button id="export" type="button" class="secondary">Exportar filtrado</button>
+        </div>
+
+        <pre id="log" class="log" tabindex="0"></pre>
+      </main>
+    </div>
+
+    <!-- Formulario de perfil -->
+    <dialog id="profile-dialog">
+      <form id="profile-form" method="dialog">
+        <h2 id="dialog-title">Nuevo perfil</h2>
+        <label>Nombre <input name="name" required /></label>
+
+        <fieldset>
+          <legend>Salto (jump host) opcional</legend>
+          <label class="chk"><input id="use-jump" type="checkbox" /> Conectar primero a un servidor intermedio</label>
+          <div id="jump-fields" class="grid hidden">
+            <label>Host <input name="jump_host" /></label>
+            <label>Puerto <input name="jump_port" type="number" value="22" /></label>
+            <label>Usuario <input name="jump_user" /></label>
+            <label>Contraseña <input name="jump_password" type="password" autocomplete="new-password" /></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Servidor destino</legend>
+          <div class="grid">
+            <label>Host <input name="target_host" required /></label>
+            <label>Puerto <input name="target_port" type="number" value="22" /></label>
+            <label>Usuario <input name="target_user" required /></label>
+            <label>Contraseña <input name="target_password" type="password" autocomplete="new-password" /></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Log</legend>
+          <label>Carpeta (relativa al home del usuario) <input name="logDir" placeholder="log/gestión" /></label>
+          <label>Archivo <input name="logFile" required placeholder="mitelcel-negocios-gestion.log" /></label>
+        </fieldset>
+
+        <p class="hint">Deja la contraseña vacía al editar para conservar la actual.</p>
+        <p id="profile-error" class="error"></p>
+        <div class="row end">
+          <button id="delete-profile" type="button" class="danger hidden">Eliminar</button>
+          <button value="cancel" type="button" id="cancel-profile" class="secondary">Cancelar</button>
+          <button type="submit">Guardar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Detalle del perfil: configuración, abrir log, editar o eliminar -->
+    <dialog id="detail-dialog">
+      <h2 id="detail-title"></h2>
+      <dl id="detail-body" class="details"></dl>
+      <div class="row end">
+        <button type="button" id="detail-delete" class="danger">Eliminar</button>
+        <button type="button" id="detail-edit" class="secondary">Editar</button>
+        <button type="button" id="detail-close" class="secondary">Cerrar</button>
+        <button type="button" id="detail-open">Abrir log</button>
+      </div>
+    </dialog>
+
+    <!-- Confirmación para cerrar la conexión -->
+    <dialog id="close-dialog">
+      <h2>¿Cerrar la conexión?</h2>
+      <p id="close-text"></p>
+      <div class="row end">
+        <button type="button" id="close-cancel" class="secondary">Cancelar</button>
+        <button type="button" id="close-confirm" class="danger">Sí, cerrar conexión</button>
+      </div>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

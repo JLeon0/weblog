@@ -1,0 +1,17 @@
+{
+  "name": "visor-logs-ssh",
+  "version": "1.0.0",
+  "description": "Visor web local de logs por SSH con salto (jump host), filtros y colores",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0",
+    "ws": "^8.22.0"
+  }
+}
