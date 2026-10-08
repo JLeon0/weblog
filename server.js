@@ -1,5 +1,6 @@
 // Servidor local: sirve la interfaz web, la API de perfiles/bóveda y un WebSocket
-// que transmite las líneas del log al navegador. Solo escucha en 127.0.0.1.
+// que transmite las líneas de los logs al navegador. Solo escucha en 127.0.0.1.
+// Un mismo WebSocket atiende varios perfiles: cada mensaje lleva el profileId.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -127,7 +128,8 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res, url);
 });
 
-// WebSocket: el navegador se suscribe a un perfil y recibe el buffer + líneas nuevas
+// WebSocket: el navegador se suscribe a uno o varios perfiles (una pestaña cada uno).
+// Cada mensaje lleva profileId para que el cliente sepa a qué pestaña pertenece.
 const wss = new WebSocketServer({
   server,
   path: '/ws',
@@ -143,25 +145,29 @@ function send(ws, obj) {
 }
 
 wss.on('connection', (ws) => {
-  let current = null; // { session, listeners }
+  const subs = new Map(); // profileId -> { session, listeners }
 
-  const detach = () => {
-    if (!current) return;
-    const { session, listeners } = current;
-    session.off('lines', listeners.lines);
-    session.off('status', listeners.status);
-    current = null;
+  const detach = (id) => {
+    const sub = subs.get(id);
+    if (!sub) return;
+    sub.session.off('lines', sub.listeners.lines);
+    sub.session.off('status', sub.listeners.status);
+    subs.delete(id);
   };
 
-  const attach = (session) => {
+  const sendBacklog = (id, session) => {
+    send(ws, { type: 'backlog', profileId: id, lines: session.lines, state: session.state });
+  };
+
+  const attach = (id, session) => {
     const listeners = {
-      lines: (lines) => send(ws, { type: 'lines', lines }),
-      status: (st) => send(ws, { type: 'status', ...st }),
+      lines: (lines) => send(ws, { type: 'lines', profileId: id, lines }),
+      status: (st) => send(ws, { type: 'status', profileId: id, ...st }),
     };
     session.on('lines', listeners.lines);
     session.on('status', listeners.status);
-    current = { session, listeners };
-    send(ws, { type: 'backlog', lines: session.lines, state: session.state });
+    subs.set(id, { session, listeners });
+    sendBacklog(id, session);
   };
 
   ws.on('message', (raw) => {
@@ -171,46 +177,49 @@ wss.on('connection', (ws) => {
     } catch (_) {
       return;
     }
+    const id = msg.profileId;
 
-    if (msg.type === 'subscribe') {
-      detach();
-      if (!vault.isUnlocked()) return send(ws, { type: 'error', msg: 'Bóveda bloqueada' });
-      try {
-        let session = sessions.get(msg.profileId);
+    try {
+      if (msg.type === 'subscribe') {
+        if (!vault.isUnlocked()) throw new Error('Bóveda bloqueada');
+        if (subs.has(id)) return sendBacklog(id, subs.get(id).session);
+        let session = sessions.get(id);
         if (!session) {
-          session = new LogSession(profiles.decrypted(msg.profileId));
-          sessions.set(msg.profileId, session);
+          session = new LogSession(profiles.decrypted(id));
+          sessions.set(id, session);
         }
-        attach(session);
+        attach(id, session);
         session.start();
-      } catch (err) {
-        send(ws, { type: 'error', msg: err.message });
       }
-    }
 
-    if (msg.type === 'restart' && current) {
-      const { session } = current;
-      session.stop();
-      const fresh = new LogSession(profiles.decrypted(msg.profileId));
-      sessions.set(msg.profileId, fresh);
-      detach();
-      attach(fresh);
-      fresh.start();
-    }
+      if (msg.type === 'unsubscribe') detach(id); // la sesión sigue viva en el servidor
 
-    // Cierra la conexión del perfil. Se mantiene suscrito para poder reiniciarla después.
-    if (msg.type === 'stop' && current) {
-      const session = sessions.get(msg.profileId);
-      if (session) {
-        session.stop(); // emite status "stopped" al navegador
-        sessions.delete(msg.profileId);
+      // Cierra la conexión del perfil; la pestaña sigue suscrita para poder reiniciarla
+      if (msg.type === 'stop') {
+        const session = sessions.get(id);
+        if (session) {
+          session.stop(); // emite status "stopped" a quien esté suscrito
+          sessions.delete(id);
+        }
       }
-    }
 
-    if (msg.type === 'unsubscribe') detach();
+      if (msg.type === 'restart') {
+        const old = sessions.get(id);
+        if (old) old.stop();
+        detach(id);
+        const fresh = new LogSession(profiles.decrypted(id));
+        sessions.set(id, fresh);
+        attach(id, fresh);
+        fresh.start();
+      }
+    } catch (err) {
+      send(ws, { type: 'error', profileId: id, msg: err.message });
+    }
   });
 
-  ws.on('close', detach);
+  ws.on('close', () => {
+    for (const id of [...subs.keys()]) detach(id);
+  });
 });
 
 server.listen(PORT, HOST, () => {

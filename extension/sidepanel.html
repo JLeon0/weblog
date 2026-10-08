@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Evidencias Matriz de Pruebas</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <strong>Matriz de pruebas</strong>
+      <button id="auth-btn" type="button" class="secondary">Conectar Google</button>
+    </header>
+
+    <section class="block">
+      <label>Hoja de Google (URL o ID)
+        <input id="sheet-input" type="text" placeholder="https://docs.google.com/spreadsheets/d/…" />
+      </label>
+      <div class="row">
+        <button id="load-btn" type="button">Cargar hoja</button>
+        <button id="reload-btn" type="button" class="secondary" title="Volver a leer la hoja">↻</button>
+      </div>
+      <label>Pestaña
+        <select id="tab-select" disabled></select>
+      </label>
+    </section>
+
+    <section class="block nav">
+      <button id="prev-btn" type="button" class="secondary" disabled title="Fila anterior (←)">◀</button>
+      <select id="row-select" disabled></select>
+      <button id="next-btn" type="button" class="secondary" disabled title="Fila siguiente (→)">▶</button>
+    </section>
+    <div id="counter" class="counter"></div>
+
+    <section class="card" id="card">
+      <div class="field"><span class="label">Usuario</span><div id="f-usuario" class="value"></div></div>
+      <div class="field"><span class="label">Funcionalidad</span><div id="f-funcionalidad" class="value"></div></div>
+      <div class="field"><span class="label">Datos de entrada</span><div id="f-datos" class="value pre"></div></div>
+      <div class="field"><span class="label">Pasos</span><div id="f-pasos" class="value pre pasos"></div></div>
+      <div class="field"><span class="label">Evidencia actual</span><div id="f-evidencia" class="value small"></div></div>
+    </section>
+
+    <section class="block">
+      <div class="row">
+        <button id="capture-btn" type="button" disabled>Capturar área</button>
+      </div>
+      <label class="chk">
+        <input id="show-inline" type="checkbox" />
+        Mostrar la imagen dentro de la celda (la hace accesible con el enlace)
+      </label>
+      <p class="hint">Si no marcas esta opción, la celda enlaza a la captura en tu Drive, visible solo con tu cuenta.</p>
+      <div id="preview-wrap" class="hidden">
+        <img id="preview" alt="Vista previa de la captura" />
+        <div class="row">
+          <button id="save-btn" type="button">Guardar en Evidencia</button>
+          <button id="discard-btn" type="button" class="secondary">Descartar</button>
+        </div>
+      </div>
+    </section>
+
+    <p id="status" class="status"></p>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

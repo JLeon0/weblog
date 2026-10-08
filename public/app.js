@@ -15,6 +15,7 @@
     master2Row: $('master2-row'),
     app: $('app'),
     profileList: $('profile-list'),
+    tabs: $('tabs'),
     newProfile: $('new-profile'),
     lock: $('lock'),
     title: $('current-title'),
@@ -54,8 +55,11 @@
   };
 
   let profiles = [];
-  let currentId = null;
-  let entries = []; // { text, level, tag, marker }
+  // Pestañas: una vista por perfil abierto { id, entries, state, blockTag }
+  const views = new Map();
+  let tabOrder = [];
+  let currentId = null; // perfil de la pestaña activa
+  let entries = []; // alias de views.get(currentId).entries: { text, level, tag, marker }
   let ws = null;
   let wsRetry = null;
   let renderPending = false;
@@ -281,7 +285,15 @@
   }
 
   // ---------- Estado de conexión ----------
-  function setStatus(state, msg = '') {
+  // Guarda el estado de una pestaña y, si es la activa, lo muestra en la barra
+  function updateState(id, state, msg = '') {
+    const v = views.get(id);
+    if (v) v.state = state;
+    renderTabs();
+    if (id === currentId) showStatus(state, msg);
+  }
+
+  function showStatus(state, msg = '') {
     el.status.textContent = labelFor(state);
     el.status.className = `status ${state === 'connected' ? 'connected' : state}`;
     el.status.title = msg;
@@ -307,34 +319,43 @@
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.onopen = () => {
-      if (currentId) ws.send(JSON.stringify({ type: 'subscribe', profileId: currentId }));
+      // Tras reconectar, vuelve a suscribir todas las pestañas abiertas
+      for (const id of views.keys()) ws.send(JSON.stringify({ type: 'subscribe', profileId: id }));
     };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
+      const v = views.get(msg.profileId);
+      if (!v) return;
+      const isActive = v.id === currentId;
+
       if (msg.type === 'backlog') {
-        blockTag = '';
-        entries = msg.lines.map(classify);
-        setStatus(msg.state);
-        render();
+        v.blockTag = '';
+        v.entries.length = 0;
+        ingest(v, msg.lines);
+        v.state = msg.state;
+        renderTabs();
+        if (isActive) {
+          showStatus(msg.state);
+          render();
+        }
       } else if (msg.type === 'lines') {
-        for (const line of msg.lines) entries.push(classify(line));
-        if (entries.length > 5000) entries.splice(0, entries.length - 5000);
-        scheduleRender();
+        ingest(v, msg.lines);
+        if (isActive) scheduleRender();
       } else if (msg.type === 'status') {
         if (msg.state === 'warn') {
-          entries.push({ text: `[stderr] ${msg.msg}`, level: 'WARN', tag: '', marker: false });
-          scheduleRender();
+          v.entries.push({ text: `[stderr] ${msg.msg}`, level: 'WARN', tag: '', marker: false });
+          if (isActive) scheduleRender();
         } else {
-          setStatus(msg.state, msg.msg);
+          updateState(v.id, msg.state, msg.msg);
           if (msg.msg && msg.state !== 'connected') {
-            entries.push({ text: `--- ${msg.msg} ---`, level: 'OTHER', tag: '', marker: true });
-            scheduleRender();
+            v.entries.push({ text: `--- ${msg.msg} ---`, level: 'OTHER', tag: '', marker: true });
+            if (isActive) scheduleRender();
           }
         }
       } else if (msg.type === 'error') {
-        setStatus('error', msg.msg);
-        entries.push({ text: `--- ${msg.msg} ---`, level: 'ERROR', tag: '', marker: true });
-        scheduleRender();
+        updateState(v.id, 'error', msg.msg);
+        v.entries.push({ text: `--- ${msg.msg} ---`, level: 'ERROR', tag: '', marker: true });
+        if (isActive) scheduleRender();
       }
     };
     ws.onclose = () => {
@@ -343,19 +364,95 @@
     };
   }
 
-  function subscribe(id) {
+  // Clasifica líneas nuevas de una pestaña respetando el bloque request/response en curso
+  function ingest(v, texts) {
+    blockTag = v.blockTag;
+    for (const t of texts) v.entries.push(classify(t));
+    v.blockTag = blockTag;
+    if (v.entries.length > 5000) v.entries.splice(0, v.entries.length - 5000);
+  }
+
+  function sendWs(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  // Abre una pestaña para el perfil (si no existe) y la activa
+  function openTab(id) {
+    if (!views.has(id)) {
+      views.set(id, { id, entries: [], state: 'idle', blockTag: '' });
+      tabOrder.push(id);
+      sendWs({ type: 'subscribe', profileId: id });
+    }
+    activate(id);
+  }
+
+  function activate(id) {
+    const v = views.get(id);
     currentId = id;
-    entries = [];
-    render();
+    entries = v ? v.entries : [];
     const p = profiles.find((x) => x.id === id);
-    el.title.textContent = p ? p.name : 'Selecciona un perfil';
+    el.title.textContent = p ? p.name : 'Abre un perfil desde la lista';
     el.editProfile.disabled = !p;
     el.restart.disabled = !p;
-    setStatus('idle');
-    if (ws && ws.readyState === WebSocket.OPEN && id) {
-      ws.send(JSON.stringify({ type: 'subscribe', profileId: id }));
-    }
+    showStatus(v ? v.state : 'idle');
+    renderTabs();
     renderProfiles();
+    render();
+  }
+
+  // Cierra la pestaña (solo deja de mostrarla; la conexión sigue viva en el servidor)
+  function closeTab(id) {
+    if (!views.has(id)) return;
+    sendWs({ type: 'unsubscribe', profileId: id });
+    views.delete(id);
+    tabOrder = tabOrder.filter((x) => x !== id);
+    if (currentId === id) {
+      const next = tabOrder[tabOrder.length - 1] ?? null;
+      if (next) activate(next);
+      else {
+        currentId = null;
+        entries = [];
+        activate(null);
+      }
+    } else {
+      renderTabs();
+      renderProfiles();
+    }
+  }
+
+  function renderTabs() {
+    el.tabs.replaceChildren();
+    if (!tabOrder.length) {
+      const hint = document.createElement('span');
+      hint.className = 'tabs-hint';
+      hint.textContent = 'Abre un perfil desde la lista para verlo aquí';
+      el.tabs.appendChild(hint);
+      return;
+    }
+    for (const id of tabOrder) {
+      const v = views.get(id);
+      const p = profiles.find((x) => x.id === id);
+      const tab = document.createElement('div');
+      tab.className = `tab${id === currentId ? ' active' : ''}`;
+      tab.title = p ? `${p.target.user}@${p.target.host}` : '';
+      const dot = document.createElement('span');
+      dot.className = `dot ${v.state}`;
+      const name = document.createElement('span');
+      name.className = 'tab-name';
+      name.textContent = p ? p.name : '(perfil eliminado)';
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'tab-close';
+      close.title = 'Cerrar pestaña (la conexión sigue activa)';
+      close.textContent = '×';
+      close.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        closeTab(id);
+      });
+      tab.append(dot, name, close);
+      tab.addEventListener('click', () => activate(id));
+      el.tabs.appendChild(tab);
+    }
   }
 
   // ---------- Detalle del perfil (modal) ----------
@@ -386,7 +483,7 @@
 
   el.detailOpen.addEventListener('click', () => {
     el.detailDialog.close();
-    subscribe(detailId);
+    openTab(detailId);
   });
 
   el.detailEdit.addEventListener('click', () => {
@@ -407,9 +504,8 @@
       return;
     }
     el.detailDialog.close();
-    const wasCurrent = currentId === p.id;
+    if (views.has(p.id)) closeTab(p.id);
     await loadProfiles();
-    if (wasCurrent) subscribe(profiles[0]?.id ?? null);
   });
 
   // ---------- Perfiles ----------
@@ -451,7 +547,7 @@
   async function loadProfiles() {
     profiles = await api('GET', '/api/profiles');
     renderProfiles();
-    if (!currentId && profiles.length) subscribe(profiles[0].id);
+    renderTabs();
   }
 
   function openDialog(profile) {
@@ -509,7 +605,7 @@
       el.profileForm.reset();
       el.dialog.close();
       await loadProfiles();
-      subscribe(saved.id);
+      openTab(saved.id);
     } catch (err) {
       el.profileError.textContent = err.message;
     }
@@ -519,10 +615,9 @@
     if (!editingId) return;
     if (!confirm('¿Eliminar este perfil?')) return;
     await api('DELETE', `/api/profiles/${encodeURIComponent(editingId)}`);
-    if (currentId === editingId) currentId = null;
     el.dialog.close();
+    if (views.has(editingId)) closeTab(editingId);
     await loadProfiles();
-    if (!currentId) subscribe(profiles[0]?.id ?? null);
   });
 
   // ---------- Bóveda ----------
@@ -569,8 +664,11 @@
   el.lock.addEventListener('click', async () => {
     await api('POST', '/api/lock');
     if (ws) ws.close();
+    views.clear();
+    tabOrder = [];
     currentId = null;
     entries = [];
+    renderTabs();
     render();
     showVault(true);
   });
@@ -653,7 +751,7 @@
   document.querySelectorAll('input[data-level]').forEach((b) => b.addEventListener('change', onFilterChange));
 
   el.clear.addEventListener('click', () => {
-    entries = [];
+    entries.length = 0; // vacía la pestaña activa sin soltar la referencia
     render();
   });
 
@@ -680,6 +778,7 @@
   // ---------- Arranque ----------
   (async function boot() {
     loadPrefs();
+    renderTabs();
     const state = await api('GET', '/api/state');
     if (state.unlocked) {
       showApp();
