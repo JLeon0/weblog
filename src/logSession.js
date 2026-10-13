@@ -43,6 +43,9 @@ function connect(cred, sock, onError) {
     client.once('ready', () => resolve(client));
     client.once('error', reject);
     client.on('error', onError);
+    // Si la conexión se cierra sin error (red caída, servidor reiniciado), también hay que reconectar
+    client.on('close', () => onError(new Error('la conexión SSH se cerró')));
+    client.on('end', () => onError(new Error('el servidor cerró la conexión SSH')));
     // Algunos servidores piden contraseña por keyboard-interactive en vez de password
     client.on('keyboard-interactive', (_name, _instr, _lang, _prompts, finish) => finish([cred.password]));
     client.connect({
@@ -56,6 +59,31 @@ function connect(cred, sock, onError) {
       keepaliveInterval: KEEPALIVE_MS,
       keepaliveCountMax: 3,
       algorithms: ALGORITHMS,
+    });
+  });
+}
+
+// Ejecuta un comando que termina solo (no tail -f) y devuelve su salida completa en bytes
+function execCollect(client, cmd, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('el servidor no respondió al leer el log')), timeoutMs);
+    client.exec(cmd, (err, stream) => {
+      if (err) {
+        clearTimeout(timer);
+        return reject(err);
+      }
+      const chunks = [];
+      let errOut = '';
+      stream.on('data', (d) => chunks.push(d));
+      stream.stderr.on('data', (d) => (errOut += d.toString('utf8')));
+      stream.on('close', () => {
+        clearTimeout(timer);
+        resolve({ buf: Buffer.concat(chunks), errOut });
+      });
+      stream.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
     });
   });
 }
@@ -77,6 +105,7 @@ class LogSession extends EventEmitter {
     this.finish = null;
     this.clients = [];
     this.everConnected = false;
+    this.offset = null; // bytes del archivo ya leídos (null = aún no se leyó nada)
   }
 
   get label() {
@@ -113,16 +142,18 @@ class LogSession extends EventEmitter {
   }
 
   async run() {
-    let delay = 2000;
+    // La espera crece con cada fallo seguido y vuelve a 2 s cuando una conexión se establece
+    this.backoff = 2000;
     while (!this.stopped) {
       try {
         this.setState('connecting', this.everConnected ? 'Reconectando...' : 'Conectando...');
         await this.connectOnce();
       } catch (err) {
         if (this.stopped) break;
+        const delay = this.backoff;
         this.setState('reconnecting', `Conexión perdida: ${err.message}. Reintento en ${Math.round(delay / 1000)} s`);
         await sleep(delay);
-        delay = Math.min(delay * 2, MAX_BACKOFF_MS);
+        this.backoff = Math.min(delay * 2, MAX_BACKOFF_MS);
         continue;
       }
       // La conexión terminó sin error (el servidor cerró el tail): reintentar
@@ -168,11 +199,34 @@ class LogSession extends EventEmitter {
         const targetClient = await connect(target, sock, onError);
         this.clients.push(targetClient);
 
-        // Primera vez: últimas 200 líneas. Reconexión: solo lo nuevo (evita duplicar).
-        const reconnecting = this.everConnected;
-        const n = reconnecting ? 0 : INITIAL_TAIL;
-        const cmd = `cd ${shq(logDir)} && tail -n ${n} -F ${shq(logFile)}`;
+        // Posición en bytes del archivo hasta donde ya se leyó. Al reconectar se retoma desde ahí,
+        // así las líneas escritas durante la caída también aparecen.
+        let reconnecting = this.offset !== null;
+        if (reconnecting) {
+          const { buf } = await execCollect(targetClient, `cd ${shq(logDir)} && wc -c < ${shq(logFile)}`, STEP_TIMEOUT_MS);
+          const size = Number(buf.toString('utf8').trim());
+          if (!Number.isFinite(size)) throw new Error(`no se pudo leer el tamaño de ${logFile}`);
+          if (size < this.offset) {
+            // El archivo fue recortado o reemplazado: se vuelve a leer desde las últimas líneas
+            this.offset = null;
+            reconnecting = false;
+          }
+        }
+
+        if (this.offset === null) {
+          // Primera lectura: últimas 200 líneas. El final va marcado con el tamaño exacto del archivo.
+          const snap = `cd ${shq(logDir)} && tail -n ${INITIAL_TAIL} ${shq(logFile)} && printf '\\0__END__%s' "$(wc -c < ${shq(logFile)})"`;
+          const { buf, errOut } = await execCollect(targetClient, snap, STEP_TIMEOUT_MS);
+          const trailerAt = buf.lastIndexOf(0);
+          const trailer = trailerAt >= 0 ? buf.slice(trailerAt).toString('ascii') : '';
+          const endM = trailer.match(/^\0__END__(\d+)$/);
+          if (!endM) throw new Error(`no se pudo leer ${logFile}${errOut ? `: ${errOut.trim()}` : ''}`);
+          this.pushText(this.decoder.write(buf.slice(0, trailerAt)));
+          this.offset = Number(endM[1]);
+        }
+
         this.everConnected = true;
+        const cmd = `cd ${shq(logDir)} && tail -c +${this.offset + 1} -F ${shq(logFile)}`;
 
         // Si el servidor no responde al comando, no quedarse esperando para siempre
         execTimer = setTimeout(() => done(new Error('el destino no respondió al iniciar tail')), STEP_TIMEOUT_MS);
@@ -180,12 +234,15 @@ class LogSession extends EventEmitter {
         targetClient.exec(cmd, (err, stream) => {
           clearTimeout(execTimer);
           if (err) return done(err);
+          this.backoff = 2000; // conexión buena: el siguiente corte se reintenta rápido
           this.setState('connected', `Conectado a ${this.label}`);
           if (reconnecting) {
-            // Marca visible: las líneas escritas durante la caída no se recuperan
-            this.pushText(`--- reconectado ${new Date().toLocaleTimeString()} (líneas durante la caída pueden faltar) ---\n`);
+            this.pushText(`--- reconectado ${new Date().toLocaleTimeString()} ---\n`);
           }
-          stream.on('data', (d) => this.pushText(this.decoder.write(d)));
+          stream.on('data', (d) => {
+            this.offset += d.length; // bytes exactos del archivo
+            this.pushText(this.decoder.write(d));
+          });
           stream.stderr.on('data', (d) => this.emit('status', { state: 'warn', msg: d.toString('utf8').trim() }));
           stream.on('close', () => done(new Error('El canal de tail se cerró')));
           stream.on('error', (e) => done(e));
