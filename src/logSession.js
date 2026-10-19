@@ -265,4 +265,30 @@ class LogSession extends EventEmitter {
   }
 }
 
-module.exports = { LogSession };
+// Abre la cadena de conexiones (salto opcional), ejecuta fn con el cliente del destino
+// y cierra todo al terminar. Lo usa el explorador de carpetas.
+async function withTarget(jump, target, fn) {
+  const clients = [];
+  const ignore = () => {};
+  try {
+    let sock;
+    if (jump) {
+      const jumpClient = await connect(jump, undefined, ignore);
+      clients.push(jumpClient);
+      sock = await withTimeout(forward(jumpClient, target.host, target.port), STEP_TIMEOUT_MS, 'abriendo la ruta al destino');
+    }
+    const targetClient = await connect(target, sock, ignore);
+    clients.push(targetClient);
+    return await fn(targetClient);
+  } finally {
+    for (const c of clients) {
+      try {
+        c.end();
+      } catch (_) {
+        /* ya cerrado */
+      }
+    }
+  }
+}
+
+module.exports = { LogSession, withTarget, execCollect, shq };

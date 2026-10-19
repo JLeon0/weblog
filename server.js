@@ -7,7 +7,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const vault = require('./src/vault');
 const profiles = require('./src/profiles');
-const { LogSession } = require('./src/logSession');
+const { LogSession, withTarget, execCollect, shq } = require('./src/logSession');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '127.0.0.1';
@@ -52,6 +52,42 @@ function stopAllSessions() {
   sessions.clear();
 }
 
+// Credencial para explorar: la escrita en el formulario o, si está vacía, la guardada
+// del mismo perfil (solo si el host y el usuario coinciden)
+function browseCred(given, saved) {
+  const host = String(given?.host || '').trim();
+  const user = String(given?.user || '').trim();
+  if (!host || !user) throw new Error('Falta host o usuario');
+  const port = Number(given.port) || 22;
+  if (given.password) return { host, port, user, password: given.password };
+  if (saved && saved.host === host && saved.user === user && saved.password) {
+    return { host, port, user, password: saved.password };
+  }
+  throw new Error(`Escribe la contraseña de ${user}@${host}`);
+}
+
+// Lista el contenido de una carpeta del servidor (solo lectura)
+async function browseFolder(body) {
+  const saved = body.profileId ? profiles.decrypted(body.profileId) : null;
+  const jump = body.jump && body.jump.host ? browseCred(body.jump, saved?.jump) : null;
+  const target = browseCred(body.target, saved?.target);
+  const dir = String(body.path || 'log').trim() || 'log';
+
+  const { buf, errOut } = await withTarget(jump, target, (client) =>
+    execCollect(client, `cd ${shq(dir)} && ls -1Ap`, 15000),
+  );
+  if (errOut.trim() && buf.length === 0) throw new Error(errOut.trim());
+
+  const entries = buf
+    .toString('utf8')
+    .split('\n')
+    .filter((l) => l.length > 0)
+    .slice(0, 2000)
+    .map((l) => (l.endsWith('/') ? { name: l.slice(0, -1), type: 'dir' } : { name: l, type: 'file' }))
+    .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+  return { path: dir, entries };
+}
+
 async function handleApi(req, res, url) {
   const { pathname } = url;
   const method = req.method;
@@ -84,6 +120,10 @@ async function handleApi(req, res, url) {
   }
   if (method === 'GET' && pathname === '/api/profiles') {
     return sendJson(res, 200, profiles.list());
+  }
+  if (method === 'POST' && pathname === '/api/browse') {
+    if (!vault.isUnlocked()) return sendJson(res, 403, { error: 'Desbloquea la bóveda primero' });
+    return sendJson(res, 200, await browseFolder(await readBody(req)));
   }
   if (method === 'POST' && /^\/api\/profiles\/[^/]+\/clone$/.test(pathname)) {
     const id = decodeURIComponent(pathname.split('/')[3]);

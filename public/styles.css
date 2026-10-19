@@ -84,6 +84,17 @@ label.chk input { width: auto; }
   gap: 10px;
 }
 .sidebar-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+/* Botones de la cabecera del menú con la misma altura y tipografía */
+.sidebar-head button {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.sidebar-title { font-size: 14px; }
 .icon-btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; line-height: 1; }
 button.link { background: none; color: var(--accent); padding: 4px 0; margin-top: 10px; font-size: 12px; }
 
@@ -105,13 +116,15 @@ button.link { background: none; color: var(--accent); padding: 4px 0; margin-top
 .profile-list li:hover { background: var(--panel-2); }
 .profile-list li.active { background: var(--accent); color: #fff; }
 .profile-list small { display: block; opacity: .75; font-size: 11px; }
-.profile-list li { position: relative; padding-right: 58px; }
-.mini { padding: 2px 7px; font-size: 11px; }
+.crumb { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; margin: 8px 0; word-break: break-all; }
+.browse-list { list-style: none; margin: 10px 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+.browse-list li { padding: 7px 10px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border); }
+.browse-list li:last-child { border-bottom: 0; }
+.browse-list li:hover { background: var(--panel-2); }
+.browse-list li.dir { font-weight: 600; }
 .details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0 4px; }
 .details dt { color: var(--muted); font-size: 13px; }
 .details dd { margin: 0; font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; word-break: break-all; }
-.clone-btn { position: absolute; right: 6px; top: 7px; }
-.profile-list li.active .clone-btn { background: #fff; color: var(--accent); border-color: #fff; }
 
 .main { display: flex; flex-direction: column; padding: 12px 16px; min-width: 0; height: 100vh; }
 

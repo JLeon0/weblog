@@ -36,6 +36,16 @@
     detailBody: $('detail-body'),
     detailOpen: $('detail-open'),
     detailEdit: $('detail-edit'),
+    detailClone: $('detail-clone'),
+    manualPath: $('manual-path'),
+    browseDialog: $('browse-dialog'),
+    browseCrumb: $('browse-path'),
+    browseList: $('browse-list'),
+    browseStatus: $('browse-status'),
+    browseError: $('browse-error'),
+    browseUp: $('browse-up'),
+    browseUse: $('browse-use'),
+    browseCancel: $('browse-cancel'),
     detailDelete: $('detail-delete'),
     detailClose: $('detail-close'),
     closeDialog: $('close-dialog'),
@@ -500,6 +510,11 @@
     openDialog(profiles.find((p) => p.id === detailId));
   });
 
+  el.detailClone.addEventListener('click', () => {
+    el.detailDialog.close();
+    cloneProfile(detailId);
+  });
+
   el.detailClose.addEventListener('click', () => el.detailDialog.close());
 
   el.detailDelete.addEventListener('click', async () => {
@@ -527,16 +542,7 @@
       name.textContent = p.name;
       const small = document.createElement('small');
       small.textContent = `${p.target.user}@${p.target.host}${p.jump ? ' · vía salto' : ''}`;
-      const clone = document.createElement('button');
-      clone.type = 'button';
-      clone.className = 'mini secondary clone-btn';
-      clone.title = 'Clonar conexión';
-      clone.textContent = 'Clonar';
-      clone.addEventListener('click', (ev) => {
-        ev.stopPropagation(); // no seleccionar el perfil al clonar
-        cloneProfile(p.id);
-      });
-      li.append(name, small, clone);
+      li.append(name, small);
       li.addEventListener('click', () => openDetail(p.id));
       el.profileList.appendChild(li);
     }
@@ -580,8 +586,84 @@
     f.elements.jump_password.placeholder = profile ? '(sin cambios)' : '';
     el.useJump.checked = !!profile?.jump;
     el.jumpFields.classList.toggle('hidden', !el.useJump.checked);
+    el.manualPath.checked = true;
     el.dialog.showModal();
   }
+
+  // ---------- Explorador de carpetas y archivos del servidor ----------
+  // El switch "Escribir a mano" apagado abre el explorador con los datos del formulario
+  let browsePath = 'log';
+
+  const joinPath = (base, name) => (base === '.' ? name : `${base}/${name}`);
+  const parentPath = (p) => p.split('/').filter(Boolean).slice(0, -1).join('/') || '.';
+
+  function formCreds() {
+    const f = el.profileForm.elements;
+    return {
+      target: { host: f.target_host.value, port: f.target_port.value, user: f.target_user.value, password: f.target_password.value },
+      jump: el.useJump.checked
+        ? { host: f.jump_host.value, port: f.jump_port.value, user: f.jump_user.value, password: f.jump_password.value }
+        : null,
+    };
+  }
+
+  async function browseTo(path) {
+    el.browseError.textContent = '';
+    el.browseStatus.textContent = 'Cargando…';
+    el.browseList.replaceChildren();
+    el.browseUp.disabled = true;
+    try {
+      const { target, jump } = formCreds();
+      const data = await api('POST', '/api/browse', { profileId: editingId || undefined, target, jump, path });
+      browsePath = data.path;
+      el.browseCrumb.textContent = `Ruta: ${data.path}`;
+      el.browseUp.disabled = browsePath === '.';
+      el.browseStatus.textContent = data.entries.length ? `${data.entries.length} elementos` : 'Carpeta vacía';
+      for (const entry of data.entries) {
+        const li = document.createElement('li');
+        li.className = entry.type;
+        li.textContent = `${entry.type === 'dir' ? '📁' : '📄'} ${entry.name}`;
+        li.addEventListener('click', () => {
+          if (entry.type === 'dir') browseTo(joinPath(browsePath, entry.name));
+          else pickFile(entry.name);
+        });
+        el.browseList.appendChild(li);
+      }
+    } catch (err) {
+      el.browseStatus.textContent = '';
+      el.browseError.textContent = err.message;
+    } finally {
+      el.browseUp.disabled = browsePath === '.';
+    }
+  }
+
+  function openBrowse() {
+    const start = el.profileForm.elements.logDir.value.trim() || 'log';
+    el.browseDialog.showModal();
+    browseTo(start);
+  }
+
+  // Al elegir un archivo: llena Carpeta y Archivo y vuelve al modo manual para ajustar
+  function pickFile(name) {
+    const f = el.profileForm.elements;
+    f.logDir.value = browsePath === '.' ? '' : browsePath;
+    f.logFile.value = name;
+    el.browseDialog.close();
+  }
+
+  el.manualPath.addEventListener('change', () => {
+    if (!el.manualPath.checked) openBrowse();
+  });
+  el.browseUp.addEventListener('click', () => browseTo(parentPath(browsePath)));
+  el.browseUse.addEventListener('click', () => {
+    el.profileForm.elements.logDir.value = browsePath === '.' ? '' : browsePath;
+    el.browseDialog.close();
+  });
+  el.browseCancel.addEventListener('click', () => el.browseDialog.close());
+  // Cualquier cierre (incluido Esc) vuelve el switch a modo manual
+  el.browseDialog.addEventListener('close', () => {
+    el.manualPath.checked = true;
+  });
 
   el.useJump.addEventListener('change', () => {
     el.jumpFields.classList.toggle('hidden', !el.useJump.checked);

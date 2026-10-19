@@ -32,7 +32,7 @@
         <div class="sidebar-head">
           <button id="toggle-sidebar" type="button" class="icon-btn" title="Mostrar u ocultar perfiles">☰</button>
           <strong class="sidebar-title">Perfiles</strong>
-          <button id="new-profile" type="button" title="Nuevo perfil">+ Nuevo</button>
+          <button id="new-profile" type="button" class="secondary" title="Nuevo perfil">+ Nuevo</button>
           <button id="settings-btn" type="button" class="icon-btn" title="Configuración" aria-label="Configuración">⚙</button>
         </div>
         <ul id="profile-list" class="profile-list"></ul>
@@ -110,6 +110,8 @@
 
         <fieldset>
           <legend>Log</legend>
+          <label class="chk"><input id="manual-path" type="checkbox" checked /> Escribir carpeta y archivo a mano</label>
+          <p class="hint">Apágalo para explorar las carpetas y archivos del servidor.</p>
           <label>Carpeta (relativa al home del usuario) <input name="logDir" placeholder="log/gestión" /></label>
           <label>Archivo <input name="logFile" required placeholder="mitelcel-negocios-gestion.log" /></label>
         </fieldset>
@@ -130,9 +132,26 @@
       <dl id="detail-body" class="details"></dl>
       <div class="row end">
         <button type="button" id="detail-delete" class="danger">Eliminar</button>
+        <button type="button" id="detail-clone" class="secondary">Clonar</button>
         <button type="button" id="detail-edit" class="secondary">Editar</button>
         <button type="button" id="detail-close" class="secondary">Cerrar</button>
         <button type="button" id="detail-open">Abrir log</button>
+      </div>
+    </dialog>
+
+    <!-- Explorador de carpetas y archivos del servidor -->
+    <dialog id="browse-dialog">
+      <h2>Elegir carpeta y archivo</h2>
+      <p id="browse-path" class="crumb"></p>
+      <div class="row">
+        <button type="button" id="browse-up" class="secondary">⬆ Subir</button>
+        <button type="button" id="browse-use" class="secondary">Usar esta carpeta</button>
+      </div>
+      <ul id="browse-list" class="browse-list"></ul>
+      <p id="browse-status" class="hint"></p>
+      <p id="browse-error" class="error"></p>
+      <div class="row end">
+        <button type="button" id="browse-cancel" class="secondary">Cancelar</button>
       </div>
     </dialog>
 
