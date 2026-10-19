@@ -22,6 +22,7 @@
         </label>
         <button type="submit" id="vault-submit">Entrar</button>
         <p id="vault-error" class="error"></p>
+        <button id="vault-reset" type="button" class="link">¿Olvidaste la clave? Reiniciar (borra perfiles)</button>
       </form>
     </section>
 
@@ -29,8 +30,10 @@
     <div id="app" class="app hidden">
       <aside class="sidebar">
         <div class="sidebar-head">
-          <strong>Perfiles</strong>
+          <button id="toggle-sidebar" type="button" class="icon-btn" title="Mostrar u ocultar perfiles">☰</button>
+          <strong class="sidebar-title">Perfiles</strong>
           <button id="new-profile" type="button" title="Nuevo perfil">+ Nuevo</button>
+          <button id="settings-btn" type="button" class="icon-btn" title="Configuración" aria-label="Configuración">⚙</button>
         </div>
         <ul id="profile-list" class="profile-list"></ul>
         <button id="lock" type="button" class="secondary">Bloquear bóveda</button>
@@ -69,6 +72,7 @@
           <span id="counter" class="counter"></span>
           <label class="chk"><input id="fmt-xml" type="checkbox" /> Formatear XML</label>
           <label class="chk"><input id="autoscroll" type="checkbox" checked /> Auto-scroll</label>
+          <label class="chk"><input id="clear-all" type="checkbox" /> Todas las pestañas</label>
           <button id="clear" type="button" class="secondary">Limpiar vista</button>
           <button id="export" type="button" class="secondary">Exportar filtrado</button>
         </div>
@@ -129,6 +133,20 @@
         <button type="button" id="detail-edit" class="secondary">Editar</button>
         <button type="button" id="detail-close" class="secondary">Cerrar</button>
         <button type="button" id="detail-open">Abrir log</button>
+      </div>
+    </dialog>
+
+    <!-- Reinicio completo: borra la clave maestra y todos los perfiles -->
+    <dialog id="reset-dialog">
+      <h2>Reiniciar la aplicación</h2>
+      <p>Esto <strong>borra la clave maestra y todos los perfiles con sus contraseñas</strong>. No se puede deshacer. Al terminar, la aplicación volverá a pedir una clave maestra nueva y tendrás que crear los perfiles otra vez.</p>
+      <label>Escribe <strong>BORRAR</strong> para confirmar
+        <input id="reset-confirm-text" type="text" autocomplete="off" />
+      </label>
+      <p id="reset-error" class="error"></p>
+      <div class="row end">
+        <button type="button" id="reset-cancel" class="secondary">Cancelar</button>
+        <button type="button" id="reset-confirm" class="danger" disabled>Borrar y reiniciar</button>
       </div>
     </dialog>
 

@@ -15,6 +15,14 @@
     master2Row: $('master2-row'),
     app: $('app'),
     profileList: $('profile-list'),
+    toggleSidebar: $('toggle-sidebar'),
+    settingsBtn: $('settings-btn'),
+    vaultReset: $('vault-reset'),
+    resetDialog: $('reset-dialog'),
+    resetConfirmText: $('reset-confirm-text'),
+    resetError: $('reset-error'),
+    resetCancel: $('reset-cancel'),
+    resetConfirm: $('reset-confirm'),
     tabs: $('tabs'),
     newProfile: $('new-profile'),
     lock: $('lock'),
@@ -40,6 +48,7 @@
     onlyIo: $('only-io'),
     autoscroll: $('autoscroll'),
     fmtXml: $('fmt-xml'),
+    clearAll: $('clear-all'),
     counter: $('counter'),
     clear: $('clear'),
     exportBtn: $('export'),
@@ -707,6 +716,7 @@
       onlyIo: el.onlyIo.checked,
       autoscroll: el.autoscroll.checked,
       fmtXml: el.fmtXml.checked,
+      clearAll: el.clearAll.checked,
     };
     document.querySelectorAll('input[data-level]').forEach((b) => (prefs.levels[b.dataset.level] = b.checked));
     try {
@@ -729,6 +739,8 @@
     el.onlyIo.checked = !!prefs.onlyIo;
     el.autoscroll.checked = prefs.autoscroll !== false;
     el.fmtXml.checked = !!prefs.fmtXml;
+    el.clearAll.checked = !!prefs.clearAll;
+    updateClearLabel();
     document.querySelectorAll('input[data-level]').forEach((b) => {
       if (prefs.levels && typeof prefs.levels[b.dataset.level] === 'boolean') {
         b.checked = prefs.levels[b.dataset.level];
@@ -750,9 +762,23 @@
   for (const id of ['regex', 'case', 'only-io', 'autoscroll', 'fmt-xml']) $(id).addEventListener('change', onFilterChange);
   document.querySelectorAll('input[data-level]').forEach((b) => b.addEventListener('change', onFilterChange));
 
+  // Con la casilla marcada, Limpiar vacía todas las pestañas abiertas; si no, solo la activa
+  function updateClearLabel() {
+    el.clear.textContent = el.clearAll.checked ? 'Limpiar todas' : 'Limpiar vista';
+  }
+
   el.clear.addEventListener('click', () => {
-    entries.length = 0; // vacía la pestaña activa sin soltar la referencia
+    if (el.clearAll.checked) {
+      for (const v of views.values()) v.entries.length = 0; // sin soltar las referencias
+    } else {
+      entries.length = 0; // vacía la pestaña activa sin soltar la referencia
+    }
     render();
+  });
+
+  el.clearAll.addEventListener('change', () => {
+    updateClearLabel();
+    onFilterChange();
   });
 
   el.exportBtn.addEventListener('click', () => {
@@ -775,9 +801,56 @@
     }
   });
 
+  // ---------- Menú de perfiles plegable ----------
+  const SIDEBAR_KEY = 'visor-sidebar-collapsed';
+
+  function applySidebar(collapsed) {
+    el.app.classList.toggle('collapsed', collapsed);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0');
+    } catch (_) {
+      /* sin almacenamiento: vuelve a abrirse al recargar */
+    }
+  }
+
+  el.toggleSidebar.addEventListener('click', () => applySidebar(!el.app.classList.contains('collapsed')));
+
+  // ---------- Configuración: reinicio completo ----------
+  function openResetDialog() {
+    el.resetConfirmText.value = '';
+    el.resetConfirm.disabled = true;
+    el.resetError.textContent = '';
+    el.resetDialog.showModal();
+    el.resetConfirmText.focus();
+  }
+
+  el.settingsBtn.addEventListener('click', openResetDialog);
+  el.vaultReset.addEventListener('click', openResetDialog);
+  el.resetCancel.addEventListener('click', () => el.resetDialog.close());
+  el.resetConfirmText.addEventListener('input', () => {
+    el.resetConfirm.disabled = el.resetConfirmText.value.trim() !== 'BORRAR';
+  });
+
+  el.resetConfirm.addEventListener('click', async () => {
+    if (el.resetConfirmText.value.trim() !== 'BORRAR') return;
+    try {
+      await api('POST', '/api/reset');
+      if (ws) ws.close();
+      el.resetDialog.close();
+      location.reload(); // vuelve a arrancar como la primera vez
+    } catch (err) {
+      el.resetError.textContent = err.message;
+    }
+  });
+
   // ---------- Arranque ----------
   (async function boot() {
     loadPrefs();
+    try {
+      applySidebar(localStorage.getItem(SIDEBAR_KEY) === '1');
+    } catch (_) {
+      /* sin almacenamiento: menú abierto */
+    }
     renderTabs();
     const state = await api('GET', '/api/state');
     if (state.unlocked) {

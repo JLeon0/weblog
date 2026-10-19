@@ -83,7 +83,18 @@ label.chk input { width: auto; }
   flex-direction: column;
   gap: 10px;
 }
-.sidebar-head { display: flex; justify-content: space-between; align-items: center; }
+.sidebar-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.icon-btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; line-height: 1; }
+button.link { background: none; color: var(--accent); padding: 4px 0; margin-top: 10px; font-size: 12px; }
+
+/* Menú de perfiles plegable */
+.app.collapsed { grid-template-columns: 56px 1fr; }
+.app.collapsed .sidebar { padding: 10px 8px; align-items: center; }
+.app.collapsed .sidebar-head { flex-direction: column; }
+.app.collapsed .sidebar-title,
+.app.collapsed #new-profile,
+.app.collapsed .profile-list,
+.app.collapsed #lock { display: none; }
 .profile-list { list-style: none; padding: 0; margin: 0; flex: 1; overflow: auto; }
 .profile-list li {
   padding: 8px 10px;
@@ -227,7 +238,11 @@ legend { color: var(--muted); font-size: 13px; padding: 0 4px; }
 
 /* Teléfono */
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
+  .app, .app.collapsed { grid-template-columns: 1fr; }
+  .app.collapsed .sidebar { align-items: stretch; }
+  .app.collapsed .sidebar-head { flex-direction: row; }
+  .app.collapsed .sidebar-title, .app.collapsed #new-profile, .app.collapsed #lock { display: revert; }
+  .app.collapsed .profile-list { display: none; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .profile-list { display: flex; gap: 6px; overflow-x: auto; }
   .profile-list li { white-space: nowrap; }

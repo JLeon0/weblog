@@ -69,6 +69,14 @@ async function handleApi(req, res, url) {
     vault.unlock(master);
     return sendJson(res, 200, { ok: true });
   }
+  // Reinicio completo: cierra sesiones, borra la bóveda y todos los perfiles.
+  // No exige desbloquear, para poder usarlo si se olvidó la clave maestra.
+  if (method === 'POST' && pathname === '/api/reset') {
+    stopAllSessions();
+    profiles.removeAll();
+    vault.destroy();
+    return sendJson(res, 200, { ok: true });
+  }
   if (method === 'POST' && pathname === '/api/lock') {
     stopAllSessions();
     vault.lock();

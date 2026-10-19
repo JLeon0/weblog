@@ -69,6 +69,12 @@ function lock() {
   key = null;
 }
 
+// Borra la bóveda: la próxima vez la app vuelve a pedir crear la clave maestra
+function destroy() {
+  lock();
+  if (fs.existsSync(VAULT_FILE)) fs.unlinkSync(VAULT_FILE);
+}
+
 function encrypt(text) {
   if (!key) throw new Error('La bóveda está bloqueada');
   return encryptWith(key, text);
@@ -79,4 +85,4 @@ function decrypt(box) {
   return decryptWith(key, box);
 }
 
-module.exports = { DATA_DIR, exists, isUnlocked, setup, unlock, lock, encrypt, decrypt };
+module.exports = { DATA_DIR, exists, isUnlocked, setup, unlock, lock, destroy, encrypt, decrypt };

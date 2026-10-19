@@ -124,6 +124,11 @@ function remove(id) {
   db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
 }
 
+// Borra todos los perfiles (usado al reiniciar la aplicación)
+function removeAll() {
+  db.exec('DELETE FROM profiles');
+}
+
 // Duplica un perfil. Las contraseñas cifradas se copian tal cual (misma bóveda),
 // así la copia funciona sin volver a escribirlas; luego se edita como cualquier perfil.
 function clone(id) {
@@ -142,4 +147,4 @@ function decrypted(id) {
   return { id: p.id, name: p.name, logDir: p.logDir, logFile: p.logFile, jump: plain(p.jump), target: plain(p.target) };
 }
 
-module.exports = { list, get, save, remove, clone, decrypted };
+module.exports = { list, get, save, remove, removeAll, clone, decrypted };
