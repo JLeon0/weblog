@@ -5,7 +5,7 @@ búsqueda, filtros, colores y reconexión automática. Solo escucha en `127.0.0.
 
 ## Requisitos
 
-- Node.js 18 o superior (ya lo tienes instalado).
+- Node.js 18 o superior.
 
 ## Uso
 
@@ -47,8 +47,6 @@ El servidor usa intercambio de claves antiguo (`diffie-hellman-group14-sha1`,
 
 - Las contraseñas se guardan cifradas (AES-256-GCM, clave derivada con scrypt) en `data/`.
 - `data/` está en `.gitignore`. No la subas a ningún repositorio.
-- Te recomiendo cambiar las contraseñas que compartiste en el chat y, más adelante,
-  pasar a claves SSH (`ssh-copy-id`), que no requieren guardar contraseñas.
 
 ## Limitaciones conocidas
 
