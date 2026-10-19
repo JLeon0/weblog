@@ -46,7 +46,6 @@ El servidor usa intercambio de claves antiguo (`diffie-hellman-group14-sha1`,
 ## Seguridad
 
 - Las contraseñas se guardan cifradas (AES-256-GCM, clave derivada con scrypt) en `data/`.
-- `data/` está en `.gitignore`. No la subas a ningún repositorio.
 
 ## Limitaciones conocidas
 
