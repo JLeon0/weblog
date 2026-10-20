@@ -155,6 +155,17 @@
       </div>
     </dialog>
 
+    <!-- Configuración: modo oscuro y acceso al reinicio -->
+    <dialog id="settings-dialog">
+      <h2>Configuración</h2>
+      <label class="chk"><input id="dark-mode" type="checkbox" /> Modo oscuro</label>
+      <p class="hint">Sin elegir nada, la app sigue el tema de tu sistema.</p>
+      <div class="row end">
+        <button type="button" id="settings-reset" class="danger">Reiniciar la aplicación…</button>
+        <button type="button" id="settings-close" class="secondary">Cerrar</button>
+      </div>
+    </dialog>
+
     <!-- Reinicio completo: borra la clave maestra y todos los perfiles -->
     <dialog id="reset-dialog">
       <h2>Reiniciar la aplicación</h2>

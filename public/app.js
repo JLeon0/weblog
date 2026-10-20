@@ -17,6 +17,10 @@
     profileList: $('profile-list'),
     toggleSidebar: $('toggle-sidebar'),
     settingsBtn: $('settings-btn'),
+    settingsDialog: $('settings-dialog'),
+    darkMode: $('dark-mode'),
+    settingsClose: $('settings-close'),
+    settingsReset: $('settings-reset'),
     vaultReset: $('vault-reset'),
     resetDialog: $('reset-dialog'),
     resetConfirmText: $('reset-confirm-text'),
@@ -897,7 +901,49 @@
 
   el.toggleSidebar.addEventListener('click', () => applySidebar(!el.app.classList.contains('collapsed')));
 
-  // ---------- Configuración: reinicio completo ----------
+  // ---------- Tema: modo oscuro / claro ----------
+  const THEME_KEY = 'visor-theme';
+  const systemLight = window.matchMedia('(prefers-color-scheme: light)');
+
+  // Oscuro si el usuario lo eligió; si no, el del sistema (CSS decide con data-theme ausente)
+  const isDarkNow = () => {
+    const t = document.documentElement.dataset.theme;
+    return t ? t === 'dark' : !systemLight.matches;
+  };
+
+  function applyTheme(dark, save = true) {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    if (save) {
+      try {
+        localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light');
+      } catch (_) {
+        /* sin almacenamiento: el tema dura solo esta sesión */
+      }
+    }
+  }
+
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || saved === 'light') applyTheme(saved === 'dark', false);
+  } catch (_) {
+    /* sin almacenamiento: tema del sistema */
+  }
+
+  // ---------- Configuración (engranaje) ----------
+  function openSettings() {
+    el.darkMode.checked = isDarkNow();
+    el.settingsDialog.showModal();
+  }
+
+  el.darkMode.addEventListener('change', () => applyTheme(el.darkMode.checked));
+  el.settingsBtn.addEventListener('click', openSettings);
+  el.settingsClose.addEventListener('click', () => el.settingsDialog.close());
+  el.settingsReset.addEventListener('click', () => {
+    el.settingsDialog.close();
+    openResetDialog();
+  });
+
+  // ---------- Reinicio completo ----------
   function openResetDialog() {
     el.resetConfirmText.value = '';
     el.resetConfirm.disabled = true;
@@ -906,7 +952,6 @@
     el.resetConfirmText.focus();
   }
 
-  el.settingsBtn.addEventListener('click', openResetDialog);
   el.vaultReset.addEventListener('click', openResetDialog);
   el.resetCancel.addEventListener('click', () => el.resetDialog.close());
   el.resetConfirmText.addEventListener('input', () => {

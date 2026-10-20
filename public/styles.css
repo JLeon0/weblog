@@ -3,8 +3,8 @@
   --panel: #171e26;
   --panel-2: #1e2731;
   --border: #2c3848;
-  --text: #d6dee8;
-  --muted: #8393a7;
+  --text: #f1f5fa;
+  --muted: #b4c1d1;
   --accent: #4f8cff;
   --error: #ff6b6b;
   --warn: #f5c451;
@@ -16,8 +16,19 @@
   --log-bg: #0b0f14;
 }
 
+/* Tema claro: elegido en el engranaje, o el del sistema si nunca se eligió */
+:root[data-theme="light"] {
+  --bg: #f4f6f9;
+  --panel: #ffffff;
+  --panel-2: #eef2f7;
+  --border: #d5dde8;
+  --text: #1d2733;
+  --muted: #5b6b7f;
+  --log-bg: #ffffff;
+}
+
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
+  :root:not([data-theme]) {
     --bg: #f4f6f9;
     --panel: #ffffff;
     --panel-2: #eef2f7;
