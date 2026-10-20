@@ -9,14 +9,11 @@ Solo escucha en `127.0.0.1`, así que solo tu equipo puede acceder.
 
 ## Requisitos
 
-<<<<<<< HEAD
-- Node.js 18 o superior.
-=======
 - **Node.js 22.13 o superior**, o Node 24 (recomendado). Se usa el módulo integrado
   `node:sqlite`, que no existe en versiones anteriores. Node 20 falla al arrancar.
 - Un navegador moderno (Chrome, Edge o Firefox).
 - Acceso de red a los servidores SSH (y al intermedio, si el perfil lo usa).
->>>>>>> 3aa22f5 (mejoras simples)
+
 
 No necesita Python, Docker ni configuración en la nube.
 
@@ -88,9 +85,6 @@ Abre <http://127.0.0.1:3000> en el navegador.
 
 ## Seguridad
 
-<<<<<<< HEAD
-- Las contraseñas se guardan cifradas (AES-256-GCM, clave derivada con scrypt) en `data/`.
-=======
 - Las contraseñas se guardan cifradas con **AES-256-GCM**, con una clave derivada de la
   clave maestra (**scrypt**). Sin la clave maestra no se pueden leer.
 - La API nunca devuelve contraseñas; la interfaz solo muestra si están guardadas.
@@ -105,7 +99,6 @@ Abre <http://127.0.0.1:3000> en el navegador.
 Algunos servidores solo aceptan intercambios de claves antiguos (`diffie-hellman-group14-sha1`,
 `group1-sha1`, etc.). Están habilitados en `src/logSession.js`, igual que `ssh -legacy`.
 Los algoritmos modernos se prefieren cuando el servidor los soporta.
->>>>>>> 3aa22f5 (mejoras simples)
 
 ## Limitaciones conocidas
 
