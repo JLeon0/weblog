@@ -48,13 +48,14 @@
             <span id="status" class="status idle">inactivo</span>
           </div>
           <div class="row">
+            <button id="toggle-filters" type="button" class="secondary" title="Ocultar filtros">Ocultar filtros</button>
             <button id="edit-profile" type="button" class="secondary" disabled>Editar perfil</button>
             <button id="restart" type="button" class="secondary" disabled>Reiniciar conexión</button>
             <button id="close-conn" type="button" class="danger" disabled>Cerrar conexión</button>
           </div>
         </header>
 
-        <div class="filters">
+        <div class="filters" id="filters">
           <input id="search" type="search" placeholder="Buscar... (Ctrl+F)" />
           <label class="chk"><input id="regex" type="checkbox" /> Regex</label>
           <label class="chk"><input id="case" type="checkbox" /> Mayús./minús.</label>
@@ -77,7 +78,10 @@
           <button id="export" type="button" class="secondary">Exportar filtrado</button>
         </div>
 
-        <pre id="log" class="log" tabindex="0"></pre>
+        <div id="viewer" class="viewer">
+          <pre id="log" class="log" tabindex="0"></pre>
+          <div id="multi" class="multi hidden"></div>
+        </div>
       </main>
     </div>
 

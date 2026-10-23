@@ -35,6 +35,8 @@
     editProfile: $('edit-profile'),
     restart: $('restart'),
     closeConn: $('close-conn'),
+    filters: $('filters'),
+    toggleFilters: $('toggle-filters'),
     detailDialog: $('detail-dialog'),
     detailTitle: $('detail-title'),
     detailBody: $('detail-body'),
@@ -67,6 +69,7 @@
     clear: $('clear'),
     exportBtn: $('export'),
     log: $('log'),
+    multi: $('multi'),
     dialog: $('profile-dialog'),
     dialogTitle: $('dialog-title'),
     profileForm: $('profile-form'),
@@ -81,8 +84,12 @@
   // Pestañas: una vista por perfil abierto { id, entries, state, blockTag }
   const views = new Map();
   let tabOrder = [];
-  let currentId = null; // perfil de la pestaña activa
+  const MULTI_ID = '__multi__'; // id sintético de la pestaña MultiView
+  let currentId = null; // perfil de la pestaña activa (o MULTI_ID)
   let entries = []; // alias de views.get(currentId).entries: { text, level, tag, marker }
+  const multiSelected = new Set(); // perfiles marcados para MultiView (máx. 4)
+  const multiPanes = new Map(); // id -> { pane, dot, name, log } (persisten para conservar el scroll)
+  let multiOrder = ''; // orden actual de paneles, para reordenar solo cuando cambia la selección
   let ws = null;
   let wsRetry = null;
   let renderPending = false;
@@ -136,16 +143,17 @@
   }
 
   // Texto desde una entrada de inicio hasta su línea de fin (incluye lo oculto por filtros)
-  function blockText(startEntry) {
-    const i = entries.indexOf(startEntry);
+  function blockText(view, startEntry) {
+    const list = view.entries;
+    const i = list.indexOf(startEntry);
     if (i < 0) return null;
     const fmt = el.fmtXml.checked;
     const out = [];
-    for (let j = i; j < entries.length; j++) {
-      out.push(displayText(entries[j], fmt));
-      if (entries[j].end) break;
+    for (let j = i; j < list.length; j++) {
+      out.push(displayText(list[j], fmt));
+      if (list[j].end) break;
     }
-    return { text: out.join('\n'), closed: entries[i + out.length - 1]?.end === true };
+    return { text: out.join('\n'), closed: list[i + out.length - 1]?.end === true };
   }
 
   // ---------- Formato XML ----------
@@ -227,10 +235,10 @@
     }
   }
 
-  function visibleEntries() {
+  function visibleEntries(view) {
     const { base, invalid } = currentMatcher();
     const onlyIo = el.onlyIo.checked;
-    return entries.filter((e) => {
+    return view.entries.filter((e) => {
       if (e.marker) return true;
       if (!levelChecked(e.level)) return false;
       if (onlyIo && !e.tag) return false;
@@ -259,12 +267,13 @@
     if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
   }
 
-  function render() {
-    renderPending = false;
+  // Pinta las entradas visibles de una vista en un contenedor. Devuelve cuántas coinciden.
+  function renderView(view, container) {
     const { base } = currentMatcher();
     const fmt = el.fmtXml.checked;
-    const list = visibleEntries();
+    const list = visibleEntries(view);
     const shown = list.slice(-MAX_RENDER);
+    const keep = el.autoscroll.checked ? null : container.scrollTop;
 
     const frag = document.createDocumentFragment();
     for (const e of shown) {
@@ -281,7 +290,7 @@
         btn.className = 'copy-btn';
         btn.textContent = 'Copiar bloque';
         btn.addEventListener('click', async () => {
-          const block = blockText(e);
+          const block = blockText(view, e);
           if (!block) {
             btn.textContent = 'No disponible';
           } else {
@@ -296,9 +305,81 @@
       div.appendChild(document.createTextNode('\n'));
       frag.appendChild(div);
     }
-    el.log.replaceChildren(frag);
-    el.counter.textContent = `${list.length} de ${entries.length} líneas${list.length > MAX_RENDER ? ` (mostrando las últimas ${MAX_RENDER})` : ''}`;
-    if (el.autoscroll.checked) el.log.scrollTop = el.log.scrollHeight;
+    container.replaceChildren(frag);
+    if (el.autoscroll.checked) container.scrollTop = container.scrollHeight;
+    else if (keep) container.scrollTop = keep;
+    return list.length;
+  }
+
+  // Vista múltiple: un panel por perfil marcado. Los paneles se reutilizan para
+  // conservar la posición de scroll cuando Auto-scroll está apagado.
+  function renderMulti() {
+    const ids = [...multiSelected];
+    el.multi.className = `multi n${ids.length}`;
+    for (const [id, p] of multiPanes) {
+      if (!ids.includes(id)) {
+        p.pane.remove();
+        multiPanes.delete(id);
+      }
+    }
+    for (const id of ids) {
+      const v = views.get(id);
+      if (!v) continue;
+      if (!multiPanes.has(id)) {
+        const pane = document.createElement('section');
+        pane.className = 'pane';
+        const head = document.createElement('div');
+        head.className = 'pane-head';
+        const dot = document.createElement('span');
+        dot.className = `dot ${v.state}`;
+        const name = document.createElement('span');
+        name.className = 'pane-name';
+        head.append(dot, name);
+        const log = document.createElement('pre');
+        log.className = 'log';
+        pane.append(head, log);
+        multiPanes.set(id, { pane, dot, name, log });
+      }
+    }
+    // Mover paneles resetea su scroll: solo reordenar cuando cambió la selección
+    const order = ids.join('\u0000');
+    if (order !== multiOrder) {
+      for (const id of ids) {
+        const p = multiPanes.get(id);
+        if (p) el.multi.appendChild(p.pane);
+      }
+      multiOrder = order;
+    }
+    for (const id of ids) {
+      const v = views.get(id);
+      if (!v) continue;
+      const p = multiPanes.get(id);
+      const prof = profiles.find((x) => x.id === id);
+      p.dot.className = `dot ${v.state}`;
+      p.name.textContent = prof ? prof.name : '(perfil eliminado)';
+      p.name.title = prof ? `${prof.target.user}@${prof.target.host}` : '';
+      renderView(v, p.log);
+    }
+    el.counter.textContent = `${ids.length} sesiones`;
+  }
+
+  function render() {
+    renderPending = false;
+    const inMulti = currentId === MULTI_ID;
+    el.log.classList.toggle('hidden', inMulti);
+    el.multi.classList.toggle('hidden', !inMulti);
+    if (inMulti) {
+      renderMulti();
+    } else {
+      const v = views.get(currentId);
+      if (v) {
+        const n = renderView(v, el.log);
+        el.counter.textContent = `${n} de ${v.entries.length} líneas${n > MAX_RENDER ? ` (mostrando las últimas ${MAX_RENDER})` : ''}`;
+      } else {
+        el.log.replaceChildren();
+        el.counter.textContent = '';
+      }
+    }
   }
 
   function scheduleRender() {
@@ -313,7 +394,12 @@
     const v = views.get(id);
     if (v) v.state = state;
     renderTabs();
-    if (id === currentId) showStatus(state, msg);
+    if (currentId === MULTI_ID) {
+      showMultiStatus();
+      scheduleRender(); // actualiza el punto de estado de los paneles
+    } else if (id === currentId) {
+      showStatus(state, msg);
+    }
   }
 
   function showStatus(state, msg = '') {
@@ -349,7 +435,7 @@
       const msg = JSON.parse(ev.data);
       const v = views.get(msg.profileId);
       if (!v) return;
-      const isActive = v.id === currentId;
+      const isShown = v.id === currentId || (currentId === MULTI_ID && multiSelected.has(v.id));
 
       if (msg.type === 'backlog') {
         v.blockTag = '';
@@ -357,28 +443,27 @@
         ingest(v, msg.lines);
         v.state = msg.state;
         renderTabs();
-        if (isActive) {
-          showStatus(msg.state);
-          render();
-        }
+        if (isShown) render();
+        if (currentId === MULTI_ID) showMultiStatus();
+        else if (v.id === currentId) showStatus(msg.state);
       } else if (msg.type === 'lines') {
         ingest(v, msg.lines);
-        if (isActive) scheduleRender();
+        if (isShown) scheduleRender();
       } else if (msg.type === 'status') {
         if (msg.state === 'warn') {
           v.entries.push({ text: `[stderr] ${msg.msg}`, level: 'WARN', tag: '', marker: false });
-          if (isActive) scheduleRender();
+          if (isShown) scheduleRender();
         } else {
           updateState(v.id, msg.state, msg.msg);
           if (msg.msg && msg.state !== 'connected') {
             v.entries.push({ text: `--- ${msg.msg} ---`, level: 'OTHER', tag: '', marker: true });
-            if (isActive) scheduleRender();
+            if (isShown) scheduleRender();
           }
         }
       } else if (msg.type === 'error') {
         updateState(v.id, 'error', msg.msg);
         v.entries.push({ text: `--- ${msg.msg} ---`, level: 'ERROR', tag: '', marker: true });
-        if (isActive) scheduleRender();
+        if (isShown) scheduleRender();
       }
     };
     ws.onclose = () => {
@@ -409,7 +494,37 @@
     activate(id);
   }
 
+  // Estado agregado de las sesiones en MultiView (para el título y el punto)
+  function multiStatus() {
+    const st = [...multiSelected].map((id) => views.get(id)?.state ?? 'stopped');
+    const connected = st.every((s) => s === 'connected');
+    const dead = st.every((s) => s === 'error' || s === 'stopped');
+    if (connected) return { state: 'connected', label: 'conectado', msg: 'Todas las sesiones conectadas' };
+    if (dead) return { state: 'stopped', label: 'detenido', msg: 'Todas detenidas o con error' };
+    return { state: 'reconnecting', label: 'conectando', msg: 'Algunas sesiones sin conectar' };
+  }
+
+  function showMultiStatus() {
+    const s = multiStatus();
+    el.status.textContent = s.label;
+    el.status.className = `status ${s.state}`;
+    el.status.title = s.msg;
+    el.editProfile.disabled = true;
+    el.restart.disabled = true;
+    el.closeConn.disabled = true;
+  }
+
   function activate(id) {
+    if (id === MULTI_ID) {
+      currentId = MULTI_ID;
+      entries = [];
+      el.title.textContent = 'MultiView';
+      showMultiStatus();
+      renderTabs();
+      renderProfiles();
+      render();
+      return;
+    }
     const v = views.get(id);
     currentId = id;
     entries = v ? v.entries : [];
@@ -429,6 +544,7 @@
     sendWs({ type: 'unsubscribe', profileId: id });
     views.delete(id);
     tabOrder = tabOrder.filter((x) => x !== id);
+    multiSelected.delete(id);
     if (currentId === id) {
       const next = tabOrder[tabOrder.length - 1] ?? null;
       if (next) activate(next);
@@ -437,15 +553,49 @@
         entries = [];
         activate(null);
       }
+    } else if (currentId === MULTI_ID && multiSelected.size < 2) {
+      const next = tabOrder[tabOrder.length - 1] ?? null;
+      if (next) activate(next);
+      else activate(null);
     } else {
       renderTabs();
       renderProfiles();
+      render();
+      if (currentId === MULTI_ID) showMultiStatus();
     }
+  }
+
+  // Marca o desmarca una pestaña para la vista múltiple (máx. 4)
+  function toggleSelect(id, on) {
+    if (on) {
+      if (multiSelected.size >= 4) return;
+      multiSelected.add(id);
+    } else {
+      multiSelected.delete(id);
+    }
+    if (currentId === MULTI_ID && multiSelected.size < 2) {
+      const next = tabOrder[tabOrder.length - 1] ?? null;
+      if (next) activate(next);
+      else activate(null);
+    } else {
+      renderTabs();
+      render();
+      if (currentId === MULTI_ID) showMultiStatus();
+    }
+  }
+
+  // Cierra la pestaña MultiView y desmarca todas las sesiones
+  function closeMultiTab() {
+    multiSelected.clear();
+    const next = tabOrder[tabOrder.length - 1] ?? null;
+    if (next) activate(next);
+    else activate(null);
   }
 
   function renderTabs() {
     el.tabs.replaceChildren();
-    if (!tabOrder.length) {
+    const showMultiTab = multiSelected.size >= 2;
+    if (!tabOrder.length && !showMultiTab) {
       const hint = document.createElement('span');
       hint.className = 'tabs-hint';
       hint.textContent = 'Abre un perfil desde la lista para verlo aquí';
@@ -458,6 +608,16 @@
       const tab = document.createElement('div');
       tab.className = `tab${id === currentId ? ' active' : ''}`;
       tab.title = p ? `${p.target.user}@${p.target.host}` : '';
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.className = 'tab-select';
+      chk.title = 'Ver en MultiView (máx. 4)';
+      chk.checked = multiSelected.has(id);
+      if (!chk.checked && multiSelected.size >= 4) chk.disabled = true;
+      chk.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleSelect(id, chk.checked);
+      });
       const dot = document.createElement('span');
       dot.className = `dot ${v.state}`;
       const name = document.createElement('span');
@@ -472,8 +632,31 @@
         ev.stopPropagation();
         closeTab(id);
       });
-      tab.append(dot, name, close);
+      tab.append(chk, dot, name, close);
       tab.addEventListener('click', () => activate(id));
+      el.tabs.appendChild(tab);
+    }
+    if (showMultiTab) {
+      const s = multiStatus();
+      const tab = document.createElement('div');
+      tab.className = `tab${currentId === MULTI_ID ? ' active' : ''}`;
+      tab.title = 'Ver las sesiones marcadas a la vez';
+      const dot = document.createElement('span');
+      dot.className = `dot ${s.state}`;
+      const name = document.createElement('span');
+      name.className = 'tab-name';
+      name.textContent = 'MultiView';
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'tab-close';
+      close.title = 'Cerrar MultiView (desmarca las sesiones)';
+      close.textContent = '×';
+      close.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        closeMultiTab();
+      });
+      tab.append(dot, name, close);
+      tab.addEventListener('click', () => activate(MULTI_ID));
       el.tabs.appendChild(tab);
     }
   }
@@ -763,13 +946,16 @@
     tabOrder = [];
     currentId = null;
     entries = [];
+    multiSelected.clear();
+    multiPanes.clear();
+    el.multi.replaceChildren();
     renderTabs();
     render();
     showVault(true);
   });
 
   el.restart.addEventListener('click', () => {
-    if (ws && ws.readyState === WebSocket.OPEN && currentId) {
+    if (ws && ws.readyState === WebSocket.OPEN && currentId && views.has(currentId)) {
       entries.push({ text: '--- reiniciando conexión ---', level: 'OTHER', tag: '', marker: true });
       ws.send(JSON.stringify({ type: 'restart', profileId: currentId }));
     }
@@ -868,7 +1054,8 @@
   });
 
   el.exportBtn.addEventListener('click', () => {
-    const text = visibleEntries().map((e) => e.text).join('\n');
+    const v = views.get(currentId);
+    const text = (v ? visibleEntries(v) : []).map((e) => e.text).join('\n');
     const name = `${(profiles.find((p) => p.id === currentId)?.name || 'log').replace(/[^\w-]+/g, '_')}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
     const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
     const a = document.createElement('a');
@@ -900,6 +1087,22 @@
   }
 
   el.toggleSidebar.addEventListener('click', () => applySidebar(!el.app.classList.contains('collapsed')));
+
+  // ---------- Ocultar filtros ----------
+  const FILTERS_KEY = 'visor-filters-hidden';
+
+  function applyFiltersHidden(hidden) {
+    el.filters.classList.toggle('hidden', hidden);
+    el.toggleFilters.textContent = hidden ? 'Mostrar filtros' : 'Ocultar filtros';
+    el.toggleFilters.title = el.toggleFilters.textContent;
+    try {
+      localStorage.setItem(FILTERS_KEY, hidden ? '1' : '0');
+    } catch (_) {
+      /* sin almacenamiento: los filtros vuelven a mostrarse al recargar */
+    }
+  }
+
+  el.toggleFilters.addEventListener('click', () => applyFiltersHidden(!el.filters.classList.contains('hidden')));
 
   // ---------- Tema: modo oscuro / claro ----------
   const THEME_KEY = 'visor-theme';
@@ -975,6 +1178,7 @@
     loadPrefs();
     try {
       applySidebar(localStorage.getItem(SIDEBAR_KEY) === '1');
+      applyFiltersHidden(localStorage.getItem(FILTERS_KEY) === '1');
     } catch (_) {
       /* sin almacenamiento: menú abierto */
     }
